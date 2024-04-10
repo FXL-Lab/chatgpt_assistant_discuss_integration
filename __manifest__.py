@@ -7,7 +7,7 @@
     'summary': "ChatGPT Assistant Integration with Discuss App",
 
     'description': """
-        ChatGPT Assistant Integration with Discuss App
+        ChatGPT Assistant Integration with Discuss App and  Livechat
     """,
 
     'author': "Elias Owis",
@@ -26,7 +26,15 @@
         'data/mail_channel_data.xml',
         'data/user_partner_data.xml',
         'views/res_config_settings_views.xml',
+        'views/mail_channel_chatgpt.xml',
     ],
+    'assets': {
+        'web.assets_backend': [
+            'chatgpt_assistant_discuss_integration/static/src/components/*/*.js',
+            'chatgpt_assistant_discuss_integration/static/src/components/*/*.xml',
+            'chatgpt_assistant_discuss_integration/static/src/components/*/*.scss',
+        ],
+    },
     'images': [
     ],
     'installable': True,
