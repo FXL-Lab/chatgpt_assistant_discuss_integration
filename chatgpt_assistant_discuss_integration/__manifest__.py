@@ -12,7 +12,7 @@
 
     'author': "FXL Technologies",
     'website': "https://fxltech.com",
-    'category': 'Uncategorized',
+    'category': 'Website',
     'version': '0.1',
 
     'depends': ['base', 'base_setup', 'mail', 'im_livechat'],
