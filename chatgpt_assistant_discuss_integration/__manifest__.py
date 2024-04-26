@@ -10,9 +10,9 @@
         ChatGPT Assistant Integration with Discuss App and  Livechat
     """,
 
-    'author': "Elias Owis",
-    'website': "https://engelias.website",
-    'category': 'Uncategorized',
+    'author': "FXL Technologies",
+    'website': "https://fxltech.com",
+    'category': 'Website',
     'version': '0.1',
 
     'depends': ['base', 'base_setup', 'mail', 'im_livechat'],
@@ -41,6 +41,8 @@
     'images': [
     ],
     'installable': True,
-    'application': False,
+    'application': True,
     'auto_install': False,
+    'price': 0,
+    'currency': 'EUR',
 }
