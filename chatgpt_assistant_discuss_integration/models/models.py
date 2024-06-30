@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 
-from odoo import models, fields, api, _
-from odoo.exceptions import UserError, ValidationError
-
-from openai import OpenAI
+import json
+import logging
+import os
 import time
 
-import logging
-
+from odoo import _, api, fields, models
+from odoo.exceptions import UserError, ValidationError
+from openai import OpenAI
 
 _logger = logging.getLogger(__name__)
 
@@ -61,7 +61,6 @@ class Channel(models.Model):
         if not enable_chatgpt_assistant_response or not self.enable_chatgpt_assistant_response:
             self.should_generate_chatgpt_response = False
             return result
-
         prompt = msg_vals.get('body')
         if not prompt:
             self.should_generate_chatgpt_response = False
@@ -111,7 +110,11 @@ class Channel(models.Model):
         return result
 
     def _notify_thread(self, message, msg_vals, **kwargs):
-        rdata = super(Channel, self)._notify_thread(message, msg_vals=msg_vals, **kwargs)
+        try:
+            rdata = super(Channel, self)._notify_thread(message, msg_vals=msg_vals, **kwargs)
+        except Exception as e:
+            _logger.error(e)
+            return {}
 
         if not self.should_generate_chatgpt_response or not self.chatgpt_message_text:
             return rdata
@@ -179,25 +182,39 @@ class Channel(models.Model):
         assistant_id = config_parameter.get_param('chatgpt_assistant_discuss_integration.assistant_id')
         try:
             client = OpenAI(api_key=chatgpt_api_key)
-            thread = client.beta.threads.create()
-            message = client.beta.threads.messages.create(
-                thread_id=thread.id,
-                role="user",
-                content=prompt,
-            )
+            thread_id = None
+            thread_dict = {}
+            chatgpt_thread_dict = os.getenv('CHATGPT_THREAD_DICT')
+            if chatgpt_thread_dict:
+                thread_dict = json.loads(chatgpt_thread_dict)
+                thread_id = thread_dict.get(str(self.id))
+            if not thread_id:
+                thread = client.beta.threads.create()
+                thread_id = thread.id
+                thread_dict[str(self.id)] = thread_id
+                os.environ['CHATGPT_THREAD_DICT'] = json.dumps(thread_dict)
+            try:
+                client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=prompt,
+                )
+            except Exception as e:
+                _logger.error(e)
+                return ""
             run = client.beta.threads.runs.create(
-                thread_id=thread.id,
+                thread_id=thread_id,
                 assistant_id=assistant_id,
             )
             while run.status in ['queued', 'in_progress', 'cancelling']:
                 time.sleep(1)  # Wait for 1 second
                 run = client.beta.threads.runs.retrieve(
-                    thread_id=thread.id,
+                    thread_id=thread_id,
                     run_id=run.id
                 )
             if run.status == 'completed':
                 messages = client.beta.threads.messages.list(
-                    thread_id=thread.id
+                    thread_id=thread_id
                 )
                 return messages.data[0].content[0].text.value
             else:
