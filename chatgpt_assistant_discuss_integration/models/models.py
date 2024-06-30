@@ -5,10 +5,9 @@ import logging
 import os
 import time
 
-from openai import OpenAI
-
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
+from openai import OpenAI
 
 _logger = logging.getLogger(__name__)
 
@@ -111,7 +110,11 @@ class Channel(models.Model):
         return result
 
     def _notify_thread(self, message, msg_vals, **kwargs):
-        rdata = super(Channel, self)._notify_thread(message, msg_vals=msg_vals, **kwargs)
+        try:
+            rdata = super(Channel, self)._notify_thread(message, msg_vals=msg_vals, **kwargs)
+        except Exception as e:
+            _logger.error(e)
+            return {}
 
         if not self.should_generate_chatgpt_response or not self.chatgpt_message_text:
             return rdata
@@ -190,12 +193,15 @@ class Channel(models.Model):
                 thread_id = thread.id
                 thread_dict[str(self.id)] = thread_id
                 os.environ['CHATGPT_THREAD_DICT'] = json.dumps(thread_dict)
-            
-            client.beta.threads.messages.create(
-                thread_id=thread_id,
-                role="user",
-                content=prompt,
-            )
+            try:
+                client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=prompt,
+                )
+            except Exception as e:
+                _logger.error(e)
+                return ""
             run = client.beta.threads.runs.create(
                 thread_id=thread_id,
                 assistant_id=assistant_id,
