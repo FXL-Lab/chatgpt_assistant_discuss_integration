@@ -17,7 +17,7 @@ class ResConfigSettings(models.TransientModel):
         string="Enable ChatGPT Assistant Response",
         help="Check this box to enable ChatGPT Assistant to respond to messages on Discuss app and website livechat",
         config_parameter="chatgpt_assistant_discuss_integration.enable_chatgpt_assistant_response",
-        default=False
+        default=True
     )
     chatgpt_api_key = fields.Char(
         string="API Key",
@@ -36,11 +36,32 @@ class Channel(models.Model):
     enable_chatgpt_assistant_response = fields.Boolean(
         string="Enable ChatGPT Assistant Response in this Channel",
         help="Check this box to enable ChatGPT assistant to respond to messages in this channel",
-        default=False,
+        default=True,
     )
 
     chatgpt_message_text = fields.Char(default=None, store=False)
     should_generate_chatgpt_response = fields.Boolean(default=False, store=False)
+
+    @api.model
+    def create_chatgpt_assistant_channel(self):
+        partner_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.partner_chatgpt")
+        user_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.user_chatgpt")
+        channel = self.create({
+            'name': 'ChatGPT Assistant',
+            'channel_type': 'chat',
+            'public': 'public',
+            'channel_partner_ids': [(4, partner_chatgpt.id)],
+            'channel_user_ids': [(4, user_chatgpt.id)],
+            'enable_chatgpt_assistant_response': True,
+        })
+        return channel
+
+    @api.model
+    def _onchange_or_create(self, vals):
+        if vals.get('public') == 'public':
+            channel = self.create_chatgpt_assistant_channel()
+            return channel
+        return super(Channel, self)._onchange_or_create(vals)
 
     def _message_post_after_hook(self, message, msg_vals):
         result = super(Channel, self)._message_post_after_hook(message, msg_vals=msg_vals)
