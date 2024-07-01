@@ -1,4 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <data>
-    </data>
+  <record id="view_livechat_channel_form_inherit" model="ir.ui.view">
+        <field name="name">view.livechat.channel.form.inherit</field>
+        <field name="model">im_livechat.channel</field>
+        <field name="inherit_id" ref="im_livechat.view_livechat_channel_form"/>
+        <field name="arch" type="xml">
+            <data>
+                <xpath expr="//field[@name='name']" position="after">
+                     <field name="enable_chatgpt_assistant_response"/>
+                            <field name="chatgpt_api_key"/>
+                            <field name="assistant_id"/>
+                </xpath>
+            </data>
+        </field>
+    </record>
 </odoo>

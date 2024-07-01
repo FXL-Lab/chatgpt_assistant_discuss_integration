@@ -1,5 +1,4 @@
-# -*- coding: utf-8 -*-
-
+# import necessary libraries and modules
 import json
 import logging
 import os
@@ -10,7 +9,6 @@ from odoo.exceptions import UserError, ValidationError
 from openai import OpenAI
 
 _logger = logging.getLogger(__name__)
-
 
 class ResConfigSettings(models.TransientModel):
     _inherit = "res.config.settings"
@@ -32,21 +30,17 @@ class ResConfigSettings(models.TransientModel):
         config_parameter="chatgpt_assistant_discuss_integration.assistant_id"
     )
 
-
 class Channel(models.Model):
     _inherit = 'mail.channel'
 
-    # These field will not store in the database, it is only used to store some temporary value
-    # to send notification correctly to the livechat and admin panel
+    enable_chatgpt_assistant_response = fields.Boolean(
+        string="Enable ChatGPT Assistant Response in this Channel",
+        help="Check this box to enable ChatGPT assistant to respond to messages in this channel",
+        default=False,
+    )
+
     chatgpt_message_text = fields.Char(default=None, store=False)
     should_generate_chatgpt_response = fields.Boolean(default=False, store=False)
-
-    # enable/disable ChatGPT assistant response in specific channel
-    enable_chatgpt_assistant_response = fields.Boolean(
-        string="Enable ChatGPT assistant response in this channel",
-        help="Check this box to enable ChatGPT assistant to respond to messages this channel",
-        default=True,
-    )
 
     def _message_post_after_hook(self, message, msg_vals):
         result = super(Channel, self)._message_post_after_hook(message, msg_vals=msg_vals)
@@ -55,57 +49,28 @@ class Channel(models.Model):
         self.should_generate_chatgpt_response = False
 
         config_parameter = self.env['ir.config_parameter'].sudo()
-        enable_chatgpt_assistant_response = config_parameter.get_param(
+        global_enable_chatgpt_assistant_response = config_parameter.get_param(
             'chatgpt_assistant_discuss_integration.enable_chatgpt_assistant_response'
         )
-        if not enable_chatgpt_assistant_response or not self.enable_chatgpt_assistant_response:
-            self.should_generate_chatgpt_response = False
+
+        if not global_enable_chatgpt_assistant_response or not self.enable_chatgpt_assistant_response:
             return result
+
         prompt = msg_vals.get('body')
         if not prompt:
-            self.should_generate_chatgpt_response = False
             return result
 
-        chatgpt_channel_id = self.env.ref('chatgpt_assistant_discuss_integration.channel_chatgpt')
         partner_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.partner_chatgpt")
         author_id = msg_vals.get('author_id')
-        chatgpt_name = str(partner_chatgpt.name or '') + ', '
 
-        is_chatgpt_private_channel = (
-            author_id != partner_chatgpt.id
-            and (chatgpt_name in msg_vals.get('record_name', '') or 'ChatGPT,' in msg_vals.get('record_name', ''))
-            and self.channel_type == 'chat'
-        )
+        self.should_generate_chatgpt_response = author_id != partner_chatgpt.id
 
-        is_chatgpt_public_channel = (
-            author_id != partner_chatgpt.id
-            and msg_vals.get('model', '') == 'mail.channel'
-            and msg_vals.get('res_id', 0) == chatgpt_channel_id.id
-        )
-
-        should_chatgpt_respond_livechat = (
-            author_id != partner_chatgpt.id
-            and (not self.env.user
-                 or (
-                     not self.env.user.has_group('im_livechat.im_livechat_group_user')
-                     and not self.env.user.has_group('im_livechat.im_livechat_group_manager')
-                 )
-                 )
-            and self.channel_type == 'livechat'
-        )
-
-        self.should_generate_chatgpt_response = (
-            is_chatgpt_private_channel
-            or is_chatgpt_public_channel
-            or should_chatgpt_respond_livechat
-        )
-
-        try:
-            if self.should_generate_chatgpt_response:
+        if self.should_generate_chatgpt_response:
+            try:
                 self.chatgpt_message_text = self._get_chatgpt_response(prompt=prompt)
-        except Exception as e:
-            _logger.error(e)
-            raise ValidationError(e)
+            except Exception as e:
+                _logger.error(e)
+                raise ValidationError(e)
 
         return result
 
@@ -119,60 +84,12 @@ class Channel(models.Model):
         if not self.should_generate_chatgpt_response or not self.chatgpt_message_text:
             return rdata
 
-        author_id = msg_vals.get('author_id')
-        partner_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.partner_chatgpt")
-        chatgpt_name = str(partner_chatgpt.name or '') + ', '
-        chatgpt_channel_id = self.env.ref('chatgpt_assistant_discuss_integration.channel_chatgpt')
-
-        is_chatgpt_private_channel = (
-            author_id != partner_chatgpt.id
-            and (chatgpt_name in msg_vals.get('record_name', '') or 'ChatGPT,' in msg_vals.get('record_name', ''))
-            and self.channel_type == 'chat'
-        )
-
-        is_chatgpt_public_channel = (
-            author_id != partner_chatgpt.id
-            and msg_vals.get('model', '') == 'mail.channel'
-            and msg_vals.get('res_id', 0) == chatgpt_channel_id.id
-        )
-
-        should_chatgpt_respond_livechat = (
-            author_id != partner_chatgpt.id
-            and (not self.env.user
-                 or (
-                     not self.env.user.has_group('im_livechat.im_livechat_group_user')
-                     and not self.env.user.has_group('im_livechat.im_livechat_group_manager')
-                 )
-                 )
-            and self.channel_type == 'livechat'
-        )
-
         user_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.user_chatgpt")
-
-        if (
-            is_chatgpt_private_channel
-        ):
-            self.with_user(user_chatgpt).message_post(
-                body=self.chatgpt_message_text,
-                message_type='comment',
-                subtype_xmlid='mail.mt_comment'
-            )
-        elif (
-            is_chatgpt_public_channel
-        ):
-            chatgpt_channel_id.with_user(user_chatgpt).message_post(
-                body=self.chatgpt_message_text,
-                message_type='comment',
-                subtype_xmlid='mail.mt_comment'
-            )
-        elif (
-            should_chatgpt_respond_livechat
-        ):
-            self.with_user(user_chatgpt).sudo().message_post(
-                body=self.chatgpt_message_text,
-                message_type='comment',
-                subtype_xmlid='mail.mt_comment'
-            )
+        self.with_user(user_chatgpt).sudo().message_post(
+            body=self.chatgpt_message_text,
+            message_type='comment',
+            subtype_xmlid='mail.mt_comment'
+        )
 
         return rdata
 

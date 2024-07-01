@@ -1,5 +1,6 @@
 <odoo>
     <data>
+
         <record id="channel_enable_chatgpt_form_view" model="ir.ui.view">
             <field name="name">mail.channel.chatgpt.view.form</field>
             <field name="model">mail.channel</field>
@@ -13,5 +14,7 @@
                 </xpath>
             </field>
         </record>
+
+
     </data>
 </odoo>
