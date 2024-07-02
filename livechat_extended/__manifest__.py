@@ -4,7 +4,7 @@
     "category": 'Extra Tools',
     "summary": '',
 
-    "depends": ['im_livechat'],
+    "depends": ['im_livechat', 'chatgpt_assistant_discuss_integration'],
 
     "data": [
         'views/chatbot_script.xml'
