@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<odoo>
+    <data>
+        <record id="chatbot_script_view_form_ex" model="ir.ui.view">
+            <field name="name">chatbot.script.form</field>
+            <field name="model">chatbot.script</field>
+            <field name="inherit_id" ref="im_livechat.chatbot_script_view_form"/>
+            <field name="arch" type="xml">
+                <div class="oe_title" position="after">
+                    <label for="chatgpt_asistant" string="ChatGPT Asistant"/>
+                    <field name="chatgpt_asistant"/>
+                </div>
+            </field>
+        </record>
+    </data>
+</odoo>
