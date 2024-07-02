@@ -34,6 +34,6 @@ class LivechatControllerEx(LivechatController):
                 rule.update({'chatbot': chatbot_script._format_for_frontend()})
         return {
             'available_for_me': (rule and rule.get('chatbot'))
-                                or operator_available and (not rule or rule['action'] != 'hide_button') or matching_rule.chatbot_script_id.chatgpt_asistant,
+                                or operator_available and (not rule or rule['action'] != 'hide_button') or (matching_rule and matching_rule.chatbot_script_id.chatgpt_asistant),
             'rule': matching_rule,
         }
