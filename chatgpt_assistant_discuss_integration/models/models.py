@@ -8,6 +8,7 @@ import time
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 from openai import OpenAI
+import markdown
 
 _logger = logging.getLogger(__name__)
 
@@ -216,7 +217,8 @@ class Channel(models.Model):
                 messages = client.beta.threads.messages.list(
                     thread_id=thread_id
                 )
-                return messages.data[0].content[0].text.value
+                msg = messages.data[0].content[0].text.value
+                return markdown.markdown(msg)
             else:
                 _logger.error(run.status)
                 raise RuntimeError(run.status)

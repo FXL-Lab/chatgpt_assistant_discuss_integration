@@ -16,7 +16,7 @@
     'version': '0.1',
 
     'depends': ['base', 'base_setup', 'mail', 'im_livechat'],
-    'external_dependencies': {'python': ['openai']},
+    'external_dependencies': {'python': ['openai', 'markdown']},
 
     'license': 'LGPL-3',
     'maintainer': 'Elias Owis',
