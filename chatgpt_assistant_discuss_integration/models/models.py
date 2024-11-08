@@ -9,6 +9,7 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 from openai import OpenAI
 import markdown
+from markupsafe import Markup
 
 _logger = logging.getLogger(__name__)
 
@@ -67,6 +68,15 @@ class Channel(models.Model):
             self.should_generate_chatgpt_response = False
             return result
 
+        if msg_vals.get('body').endswith('has left the conversation.'):
+            self.should_generate_chatgpt_response = False
+            _logger.info("User has left the conversation.")
+            return result
+        if isinstance(msg_vals.get('body'), Markup) and str(msg_vals.get('body')).startswith('<p>Rating:'):
+            self.should_generate_chatgpt_response = False
+            _logger.info("Message is a rating")
+            return result
+
         chatgpt_channel_id = self.env.ref('chatgpt_assistant_discuss_integration.channel_chatgpt')
         partner_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.partner_chatgpt")
         author_id = msg_vals.get('author_id')
@@ -105,7 +115,7 @@ class Channel(models.Model):
             if self.should_generate_chatgpt_response:
                 self.chatgpt_message_text = self._get_chatgpt_response(prompt=prompt)
         except Exception as e:
-            _logger.error(e)
+            _logger.error(f"message_post_after_hook: {e}")
             raise ValidationError(e)
 
         return result
@@ -201,7 +211,7 @@ class Channel(models.Model):
                     content=prompt,
                 )
             except Exception as e:
-                _logger.error(e)
+                _logger.error(f"_get_chatgpt_response error messages: {e}")
                 return ""
             run = client.beta.threads.runs.create(
                 thread_id=thread_id,
@@ -220,8 +230,8 @@ class Channel(models.Model):
                 msg = messages.data[0].content[0].text.value
                 return markdown.markdown(msg)
             else:
-                _logger.error(run.status)
+                _logger.error(f"Run status error: {run.status}")
                 raise RuntimeError(run.status)
         except Exception as e:
-            _logger.error(e)
+            _logger.error(f"_get_chatgpt_response error: {e}")
             raise RuntimeError(_(e))
