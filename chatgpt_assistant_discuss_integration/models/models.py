@@ -213,25 +213,37 @@ class Channel(models.Model):
             except Exception as e:
                 _logger.error(f"_get_chatgpt_response error messages: {e}")
                 return ""
-            run = client.beta.threads.runs.create(
-                thread_id=thread_id,
-                assistant_id=assistant_id,
-            )
-            while run.status in ['queued', 'in_progress', 'cancelling']:
-                time.sleep(1)  # Wait for 1 second
-                run = client.beta.threads.runs.retrieve(
+            # if rate_limit_exceeded error, wait for 5 second and try again, but only 5 times
+            wait_time = 10
+            for i in range(5):
+                run = client.beta.threads.runs.create(
                     thread_id=thread_id,
-                    run_id=run.id
+                    assistant_id=assistant_id,
                 )
-            if run.status == 'completed':
-                messages = client.beta.threads.messages.list(
-                    thread_id=thread_id
-                )
-                msg = messages.data[0].content[0].text.value
-                return markdown.markdown(msg)
-            else:
-                _logger.error(f"Run status error: {run.status}")
-                raise RuntimeError(run.status)
+                while run.status in ['queued', 'in_progress', 'cancelling']:
+                    time.sleep(1)  # Wait for 1 second
+                    run = client.beta.threads.runs.retrieve(
+                        thread_id=thread_id,
+                        run_id=run.id
+                    )
+                if run.status == 'failed':
+                    if run.last_error.code == 'rate_limit_exceeded':
+                        _logger.warning(f"Rate limit exceeded, waiting for 10 seconds")
+                        time.sleep(wait_time)
+                        wait_time += 5
+                        continue
+                    _logger.error(f"Run error: {run.last_error}")
+                    raise RuntimeError(run.last_error.code)
+                if run.status == 'completed':
+                    messages = client.beta.threads.messages.list(
+                        thread_id=thread_id
+                    )
+                    msg = messages.data[0].content[0].text.value
+                    return markdown.markdown(msg)
+                else:
+                    _logger.error(f"Run status error: {run.status}")
+                    _logger.error(f"Run error: {run.last_error}")
+                    raise RuntimeError(run.last_error.code)
         except Exception as e:
             _logger.error(f"_get_chatgpt_response error: {e}")
             raise RuntimeError(_(e))
