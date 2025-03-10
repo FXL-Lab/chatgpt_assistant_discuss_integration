@@ -76,6 +76,18 @@ class Channel(models.Model):
             self.should_generate_chatgpt_response = False
             _logger.info("Message is a rating")
             return result
+        
+        if self.channel_type == 'livechat':
+            if self.env['im_livechat.channel'].browse(self.livechat_channel_id.id).enable_chatgpt_assistant_response_channel == False:
+                self.should_generate_chatgpt_response = False
+                _logger.info("Livechat channel is disabled for ChatGPT assistant response")
+                return result
+            else:
+                _logger.info("Livechat channel is enabled for ChatGPT assistant response")
+        else:
+            _logger.info("Channel is not livechat")
+            self.should_generate_chatgpt_response = False
+            return result
 
         chatgpt_channel_id = self.env.ref('chatgpt_assistant_discuss_integration.channel_chatgpt')
         partner_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.partner_chatgpt")
