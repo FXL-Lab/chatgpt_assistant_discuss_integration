@@ -83,6 +83,7 @@ class Channel(models.Model):
                 _logger.info("Livechat channel is disabled for ChatGPT assistant response")
                 return result
             else:
+                assistant_id = self.env['im_livechat.channel'].browse(self.livechat_channel_id.id).assistant_id
                 _logger.info("Livechat channel is enabled for ChatGPT assistant response")
         else:
             _logger.info("Channel is not livechat")
@@ -125,7 +126,7 @@ class Channel(models.Model):
 
         try:
             if self.should_generate_chatgpt_response:
-                self.chatgpt_message_text = self._get_chatgpt_response(prompt=prompt)
+                self.chatgpt_message_text = self._get_chatgpt_response(prompt=prompt, assistant_id=assistant_id)
         except Exception as e:
             _logger.error(f"message_post_after_hook: {e}")
             raise ValidationError(e)
@@ -199,10 +200,11 @@ class Channel(models.Model):
 
         return rdata
 
-    def _get_chatgpt_response(self, prompt):
+    def _get_chatgpt_response(self, prompt, assistant_id):
         config_parameter = self.env['ir.config_parameter'].sudo()
         chatgpt_api_key = config_parameter.get_param('chatgpt_assistant_discuss_integration.chatgpt_api_key')
-        assistant_id = config_parameter.get_param('chatgpt_assistant_discuss_integration.assistant_id')
+        if not assistant_id:
+            assistant_id = config_parameter.get_param('chatgpt_assistant_discuss_integration.assistant_id')
         try:
             client = OpenAI(api_key=chatgpt_api_key)
             thread_id = None
@@ -258,4 +260,4 @@ class Channel(models.Model):
                     raise RuntimeError(run.last_error.code)
         except Exception as e:
             _logger.error(f"_get_chatgpt_response error: {e}")
-            raise RuntimeError(_(e))
+            raise RuntimeError('Chatbot error, please try again later.')

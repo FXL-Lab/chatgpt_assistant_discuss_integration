@@ -10,6 +10,11 @@ class ImLivechatChannel(models.Model):
         string="Enable ChatGPT Assistant in this channel",
         default=False,
     )
+    assistant_id = fields.Char(
+        string="Assistant ID",
+        help="ID of the assistant to be used in this channel.",
+        default=''
+    )
 
     def _get_available_users(self):
         users = super(ImLivechatChannel, self)._get_available_users()

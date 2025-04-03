@@ -10,6 +10,10 @@
                         <field name="enable_chatgpt_assistant_response_channel"/>
                         <span>Enable ChatGPT Assistant</span>
                     </div>
+                    <div>
+                        <span>Assistant ID:</span>
+                        <field name="assistant_id" style="border-bottom: 1px solid #ccc;"/>
+                    </div>
                 </xpath>
             </field>
         </record>
