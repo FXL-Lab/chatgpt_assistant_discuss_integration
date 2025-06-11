@@ -3,6 +3,7 @@ from odoo import api, Command, fields, models
 
 _logger = logging.getLogger(__name__)
 
+
 class ImLivechatChannel(models.Model):
     _inherit = 'im_livechat.channel'
 
@@ -16,13 +17,14 @@ class ImLivechatChannel(models.Model):
         default=''
     )
 
-    def _get_available_users(self):
-        users = super(ImLivechatChannel, self)._get_available_users()
-        enable_chatgpt = self.env['ir.config_parameter'].sudo().get_param(
+    @api.depends('user_ids.im_status')
+    def _compute_available_operator_ids(self):
+        param_enable_chatgpt = self.env['ir.config_parameter'].sudo().get_param(
             'chatgpt_assistant_discuss_integration.enable_chatgpt_assistant_response'
         )
-        if not enable_chatgpt or not self.enable_chatgpt_assistant_response_channel:
-            return users
-        if not users and self.rule_ids.filtered(lambda r: r.chatbot_script_id and r.chatbot_script_id.chatgpt_asistant):
-            users = self.env.ref('chatgpt_assistant_discuss_integration.user_chatgpt')
-        return users
+        for record in self:
+            available_users = record.user_ids.filtered(lambda u: u._is_user_available())
+            if not available_users and param_enable_chatgpt and record.enable_chatgpt_assistant_response_channel:
+                if record.rule_ids.filtered(lambda r: r.chatbot_script_id and r.chatbot_script_id.chatgpt_asistant):
+                    available_users = self.env.ref('chatgpt_assistant_discuss_integration.user_chatgpt')
+            record.available_operator_ids = available_users

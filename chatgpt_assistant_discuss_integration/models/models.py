@@ -36,7 +36,7 @@ class ResConfigSettings(models.TransientModel):
 
 
 class Channel(models.Model):
-    _inherit = 'mail.channel'
+    _inherit = 'discuss.channel'
 
     # These field will not store in the database, it is only used to store some temporary value
     # to send notification correctly to the livechat and admin panel
@@ -76,7 +76,7 @@ class Channel(models.Model):
             self.should_generate_chatgpt_response = False
             _logger.info("Message is a rating")
             return result
-        
+
         if self.channel_type == 'livechat':
             if self.env['im_livechat.channel'].browse(self.livechat_channel_id.id).enable_chatgpt_assistant_response_channel == False:
                 self.should_generate_chatgpt_response = False
@@ -96,32 +96,32 @@ class Channel(models.Model):
         chatgpt_name = str(partner_chatgpt.name or '') + ', '
 
         is_chatgpt_private_channel = (
-            author_id != partner_chatgpt.id
-            and (chatgpt_name in msg_vals.get('record_name', '') or 'ChatGPT,' in msg_vals.get('record_name', ''))
-            and self.channel_type == 'chat'
+                author_id != partner_chatgpt.id
+                and (chatgpt_name in msg_vals.get('record_name', '') or 'ChatGPT,' in msg_vals.get('record_name', ''))
+                and self.channel_type == 'chat'
         )
 
         is_chatgpt_public_channel = (
-            author_id != partner_chatgpt.id
-            and msg_vals.get('model', '') == 'mail.channel'
-            and msg_vals.get('res_id', 0) == chatgpt_channel_id.id
+                author_id != partner_chatgpt.id
+                and msg_vals.get('model', '') == 'discuss.channel'
+                and msg_vals.get('res_id', 0) == chatgpt_channel_id.id
         )
 
         should_chatgpt_respond_livechat = (
-            author_id != partner_chatgpt.id
-            and (not self.env.user
-                 or (
-                     not self.env.user.has_group('im_livechat.im_livechat_group_user')
-                     and not self.env.user.has_group('im_livechat.im_livechat_group_manager')
-                 )
-                 )
-            and self.channel_type == 'livechat'
+                author_id != partner_chatgpt.id
+                and (not self.env.user
+                     or (
+                             not self.env.user.has_group('im_livechat.im_livechat_group_user')
+                             and not self.env.user.has_group('im_livechat.im_livechat_group_manager')
+                     )
+                     )
+                and self.channel_type == 'livechat'
         )
 
         self.should_generate_chatgpt_response = (
-            is_chatgpt_private_channel
-            or is_chatgpt_public_channel
-            or should_chatgpt_respond_livechat
+                is_chatgpt_private_channel
+                or is_chatgpt_public_channel
+                or should_chatgpt_respond_livechat
         )
 
         try:
@@ -149,32 +149,32 @@ class Channel(models.Model):
         chatgpt_channel_id = self.env.ref('chatgpt_assistant_discuss_integration.channel_chatgpt')
 
         is_chatgpt_private_channel = (
-            author_id != partner_chatgpt.id
-            and (chatgpt_name in msg_vals.get('record_name', '') or 'ChatGPT,' in msg_vals.get('record_name', ''))
-            and self.channel_type == 'chat'
+                author_id != partner_chatgpt.id
+                and (chatgpt_name in msg_vals.get('record_name', '') or 'ChatGPT,' in msg_vals.get('record_name', ''))
+                and self.channel_type == 'chat'
         )
 
         is_chatgpt_public_channel = (
-            author_id != partner_chatgpt.id
-            and msg_vals.get('model', '') == 'mail.channel'
-            and msg_vals.get('res_id', 0) == chatgpt_channel_id.id
+                author_id != partner_chatgpt.id
+                and msg_vals.get('model', '') == 'discuss.channel'
+                and msg_vals.get('res_id', 0) == chatgpt_channel_id.id
         )
 
         should_chatgpt_respond_livechat = (
-            author_id != partner_chatgpt.id
-            and (not self.env.user
-                 or (
-                     not self.env.user.has_group('im_livechat.im_livechat_group_user')
-                     and not self.env.user.has_group('im_livechat.im_livechat_group_manager')
-                 )
-                 )
-            and self.channel_type == 'livechat'
+                author_id != partner_chatgpt.id
+                and (not self.env.user
+                     or (
+                             not self.env.user.has_group('im_livechat.im_livechat_group_user')
+                             and not self.env.user.has_group('im_livechat.im_livechat_group_manager')
+                     )
+                     )
+                and self.channel_type == 'livechat'
         )
 
         user_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.user_chatgpt")
 
         if (
-            is_chatgpt_private_channel
+                is_chatgpt_private_channel
         ):
             self.with_user(user_chatgpt).message_post(
                 body=self.chatgpt_message_text,
@@ -182,7 +182,7 @@ class Channel(models.Model):
                 subtype_xmlid='mail.mt_comment'
             )
         elif (
-            is_chatgpt_public_channel
+                is_chatgpt_public_channel
         ):
             chatgpt_channel_id.with_user(user_chatgpt).message_post(
                 body=self.chatgpt_message_text,
@@ -190,7 +190,7 @@ class Channel(models.Model):
                 subtype_xmlid='mail.mt_comment'
             )
         elif (
-            should_chatgpt_respond_livechat
+                should_chatgpt_respond_livechat
         ):
             self.with_user(user_chatgpt).sudo().message_post(
                 body=self.chatgpt_message_text,

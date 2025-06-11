@@ -41,7 +41,7 @@ registerPatch({
     recordMethods: {
         _handleNotification({payload, type}) {
             this._super(...arguments);
-            if (type === 'mail.channel/new_message') {
+            if (type === 'discuss.channel/new_message') {
                 this.messaging.publicLivechatGlobal.update({
                     messages: this.messaging.publicLivechatGlobal.messages.filter(message => !message.data.temporary_to_delete),
                 });
