@@ -15,14 +15,14 @@ class ThreadViewTopbarComponent extends ThreadViewTopbar {
     setup() {
         super.setup()
         this.action = useService("action")
-        this.model = "mail.channel"
+        this.model = "discuss.channel"
     }
 
     async openChannelForChatGPT() {
         const channel_id = this.props.record.thread.channel?.id
         await this.action.doAction({
             "type": "ir.actions.act_window",
-            "res_model": "mail.channel",
+            "res_model": "discuss.channel",
             "views": [[false, "form"]],
             "res_id": channel_id,
         });

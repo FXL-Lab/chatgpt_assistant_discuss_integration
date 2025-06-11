@@ -29,16 +29,16 @@
         'views/mail_channel_chatgpt.xml',
         'views/chatbot_script.xml'
     ],
-    'assets': {
-        'web.assets_backend': [
-            'chatgpt_assistant_discuss_integration/static/src/components/*/*.js',
-            'chatgpt_assistant_discuss_integration/static/src/components/*/*.xml',
-            'chatgpt_assistant_discuss_integration/static/src/components/*/*.scss',
-        ],
-        'im_livechat.assets_public_livechat': [
-            'chatgpt_assistant_discuss_integration/static/src/public_models/*.js',
-        ],
-    },
+    # 'assets': {
+    #     'web.assets_backend': [
+    #         'chatgpt_assistant_discuss_integration/static/src/components/*/*.js',
+    #         'chatgpt_assistant_discuss_integration/static/src/components/*/*.xml',
+    #         'chatgpt_assistant_discuss_integration/static/src/components/*/*.scss',
+    #     ],
+    #     'im_livechat.assets_public_livechat': [
+    #         'chatgpt_assistant_discuss_integration/static/src/public_models/*.js',
+    #     ],
+    # },
     'images': [
     ],
     'installable': True,
