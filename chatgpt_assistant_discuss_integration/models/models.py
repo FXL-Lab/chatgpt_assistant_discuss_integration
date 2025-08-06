@@ -2,7 +2,9 @@
 
 import json
 import logging
+import re
 import time
+import markdown
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
@@ -241,7 +243,7 @@ class Channel(models.Model):
                 is_chatgpt_private_channel
         ):
             self.with_user(user_chatgpt).message_post(
-                body=self.chatgpt_message_text,
+                body=Markup(self._linkify_text(self.chatgpt_message_text)),
                 message_type='comment',
                 subtype_xmlid='mail.mt_comment'
             )
@@ -249,7 +251,7 @@ class Channel(models.Model):
                 is_chatgpt_public_channel
         ):
             chatgpt_channel_id.with_user(user_chatgpt).message_post(
-                body=self.chatgpt_message_text,
+                body=Markup(self._linkify_text(self.chatgpt_message_text)),
                 message_type='comment',
                 subtype_xmlid='mail.mt_comment'
             )
@@ -257,14 +259,82 @@ class Channel(models.Model):
                 should_chatgpt_respond_livechat
         ):
             self.with_user(user_chatgpt).sudo().message_post(
-                body=self.chatgpt_message_text,
+                body=Markup(self._linkify_text(self.chatgpt_message_text)),
                 message_type='comment',
                 subtype_xmlid='mail.mt_comment'
             )
 
         return rdata
 
-    def _get_chatgpt_response(self, prompt, assistant_id, msg_vals):
+    def _linkify_text(self, text):
+        """Convert URLs and markdown syntax to HTML using the markdown library."""
+        if not text:
+            return text
+        
+        # Configure markdown with minimal extensions for livechat
+        md = markdown.Markdown(extensions=[
+            'nl2br',        # Convert newlines to <br>
+        ])
+        
+        # Convert markdown to HTML
+        html_text = md.convert(text)
+        
+        # Ensure all <a> tags have target="_blank" and security attributes
+        def add_target_blank_to_links(text):
+            # Pattern to find <a> tags
+            link_pattern = r'<a\s+([^>]*?)href\s*=\s*["\']([^"\']*)["\']([^>]*?)>'
+            
+            def replace_link(match):
+                before_href = match.group(1)
+                url = match.group(2)
+                after_href = match.group(3)
+                
+                # Check if target="_blank" is already present
+                if 'target=' not in before_href + after_href:
+                    # Add target="_blank" and security attributes
+                    return f'<a {before_href}href="{url}"{after_href} target="_blank" rel="noreferrer noopener">'
+                else:
+                    # Link already has target attribute, just ensure it's _blank
+                    full_tag = f'<a {before_href}href="{url}"{after_href}>'
+                    # Replace any existing target with _blank
+                    full_tag = re.sub(r'target\s*=\s*["\'][^"\']*["\']', 'target="_blank"', full_tag)
+                    # Add security attributes if not present
+                    if 'rel=' not in full_tag:
+                        full_tag = full_tag[:-1] + ' rel="noreferrer noopener">'
+                    return full_tag
+            
+            return re.sub(link_pattern, replace_link, text)
+        
+        # Apply target="_blank" to markdown-generated links
+        html_text = add_target_blank_to_links(html_text)
+        
+        # Additional URL linkification for URLs not in markdown links
+        # This handles plain URLs that aren't already in [text](url) format
+        def replace_urls_not_in_html(text):
+            # Split by HTML tags to avoid processing content inside tags
+            parts = re.split(r'(<[^>]*>)', text)
+            result_parts = []
+            
+            url_pattern = r'(?<!href=["\'])(?<!href=")(?<!href=\')(?:https?://|www\.)(?:[a-zA-Z0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+            
+            for i, part in enumerate(parts):
+                if i % 2 == 0:  # Not an HTML tag
+                    def make_link(match):
+                        url = match.group(0)
+                        href = url if url.startswith(('http://', 'https://')) else 'http://' + url
+                        return f'<a href="{href}" target="_blank" rel="noreferrer noopener">{url}</a>'
+                    
+                    part = re.sub(url_pattern, make_link, part)
+                result_parts.append(part)
+            
+            return ''.join(result_parts)
+        
+        # Apply additional URL processing
+        processed_text = replace_urls_not_in_html(html_text)
+        
+        return processed_text
+
+    def _get_chatgpt_response(self, prompt, assistant_id=None, msg_vals=None):
         config_parameter = self.env['ir.config_parameter'].sudo()
         chatgpt_api_key = config_parameter.get_param('chatgpt_assistant_discuss_integration.chatgpt_api_key')
         if not assistant_id:
@@ -324,6 +394,10 @@ class Channel(models.Model):
                 if run.status == 'completed':
                     messages = client.beta.threads.messages.list(thread_id=thread_id)
                     msg = messages.data[0].content[0].text.value
+                    _logger.info(f"ChatGPT response for session {session_key}: {msg}")
+                    
+                    # Return the message text directly without backend processing
+                    # Let the frontend handle URL linkification naturally
                     return msg
                 else:
                     _logger.error(f"Run status error for session {session_key}: {run.status}")
