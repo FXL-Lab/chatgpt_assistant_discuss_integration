@@ -56,6 +56,13 @@ class Channel(models.Model):
         help="JSON mapping of session/user IDs to OpenAI thread IDs",
         default='{}',
     )
+    
+    # Track which conversations were started by ChatGPT to maintain continuity
+    chatgpt_active_conversations = fields.Text(
+        string="ChatGPT Active Conversations",
+        help="JSON mapping of session/user IDs to track if ChatGPT started the conversation",
+        default='{}',
+    )
 
     def _message_post_after_hook(self, message, msg_vals):
         result = super(Channel, self)._message_post_after_hook(message, msg_vals=msg_vals)
@@ -128,6 +135,9 @@ class Channel(models.Model):
                 and msg_vals.get('res_id', 0) == chatgpt_channel_id.id
         )
 
+        # All operator availability and handoff logic is now handled in _should_chatgpt_respond()
+        session_key = self._get_session_key(msg_vals) if self.channel_type == 'livechat' else None
+
         should_chatgpt_respond_livechat = (
                 author_id != partner_chatgpt.id
                 and (not self.env.user
@@ -137,6 +147,7 @@ class Channel(models.Model):
                      )
                      )
                 and self.channel_type == 'livechat'
+                and self._should_chatgpt_respond(msg_vals)  # Use unified handoff logic
         )
 
         self.should_generate_chatgpt_response = (
@@ -206,11 +217,21 @@ class Channel(models.Model):
             _logger.error(e)
             return {}
 
-        if not self.should_generate_chatgpt_response or not self.chatgpt_message_text:
-            return rdata
-
         author_id = msg_vals.get('author_id')
         partner_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.partner_chatgpt")
+        
+        # Check if a human operator is sending a message in a livechat channel
+        if (self.channel_type == 'livechat' and 
+            author_id != partner_chatgpt.id and 
+            self.env.user and 
+            (self.env.user.has_group('im_livechat.im_livechat_group_user') or 
+             self.env.user.has_group('im_livechat.im_livechat_group_manager'))):
+            # A human operator is responding, hand off the conversation
+            session_key = self._get_session_key(msg_vals)
+            self._handoff_conversation_to_human(session_key)
+
+        if not self.should_generate_chatgpt_response or not self.chatgpt_message_text:
+            return rdata
         chatgpt_name = str(partner_chatgpt.name or '') + ', '
         chatgpt_channel_id = self.env.ref('chatgpt_assistant_discuss_integration.channel_chatgpt')
 
@@ -226,6 +247,7 @@ class Channel(models.Model):
                 and msg_vals.get('res_id', 0) == chatgpt_channel_id.id
         )
 
+        # Use new conversation handoff logic for livechat
         should_chatgpt_respond_livechat = (
                 author_id != partner_chatgpt.id
                 and (not self.env.user
@@ -235,6 +257,7 @@ class Channel(models.Model):
                      )
                      )
                 and self.channel_type == 'livechat'
+                and self._should_chatgpt_respond(msg_vals)  # Use new handoff logic
         )
 
         user_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.user_chatgpt")
@@ -396,6 +419,9 @@ class Channel(models.Model):
                     msg = messages.data[0].content[0].text.value
                     _logger.info(f"ChatGPT response for session {session_key}: {msg}")
                     
+                    # Mark this conversation as active for ChatGPT
+                    self._mark_chatgpt_conversation_active(session_key)
+                    
                     # Return the message text directly without backend processing
                     # Let the frontend handle URL linkification naturally
                     return msg
@@ -441,3 +467,115 @@ class Channel(models.Model):
             
             _logger.info(f"Reset all {thread_count} ChatGPT threads for channel {self.id}")
             return True
+
+    def _is_chatgpt_conversation_active(self, session_key):
+        """Check if ChatGPT has an active conversation for the given session"""
+        if not session_key:
+            return False
+        try:
+            active_conversations = json.loads(self.chatgpt_active_conversations or '{}')
+            return active_conversations.get(session_key, False)
+        except (json.JSONDecodeError, TypeError):
+            return False
+
+    def _mark_chatgpt_conversation_active(self, session_key):
+        """Mark a conversation as being actively handled by ChatGPT"""
+        if not session_key:
+            return
+        try:
+            active_conversations = json.loads(self.chatgpt_active_conversations or '{}')
+            active_conversations[session_key] = True
+            self.sudo().write({'chatgpt_active_conversations': json.dumps(active_conversations)})
+            _logger.info(f"Marked ChatGPT conversation active for session {session_key} in channel {self.id}")
+        except (json.JSONDecodeError, TypeError):
+            # If there's an error, start fresh
+            self.sudo().write({'chatgpt_active_conversations': json.dumps({session_key: True})})
+
+    def _has_human_operator_participated(self):
+        """
+        Check if any human operator has already sent messages in this conversation.
+        Returns True if a human operator has ever written a message in this channel.
+        Optimized to return quickly once a human operator is found.
+        """
+        if self.channel_type != 'livechat':
+            return False
+            
+        partner_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.partner_chatgpt")
+        
+        # Search for messages from human operators (users with livechat groups, excluding ChatGPT)
+        # Order by date DESC to check most recent messages first
+        human_operator_messages = self.env['mail.message'].search([
+            ('res_id', '=', self.id),
+            ('model', '=', 'discuss.channel'),
+            ('author_id', '!=', partner_chatgpt.id),
+            ('message_type', '=', 'comment'),
+        ], order='date desc')
+        
+        # Check if any of these messages are from users with operator permissions
+        for message in human_operator_messages:
+            if message.author_id and message.author_id.user_ids:
+                user = message.author_id.user_ids[0]  # Get the first user associated with this partner
+                if (user.has_group('im_livechat.im_livechat_group_user') or 
+                    user.has_group('im_livechat.im_livechat_group_manager')):
+                    _logger.info(f"Found human operator message from user {user.name} in channel {self.id} - ChatGPT will not respond")
+                    return True
+        
+        _logger.debug(f"No human operator messages found in channel {self.id} - ChatGPT may respond")
+        return False
+
+    def _should_chatgpt_respond(self, msg_vals):
+        """
+        Determine if ChatGPT should respond based on operator availability and conversation state.
+        
+        Logic:
+        1. If a human operator has ever participated in this conversation -> ChatGPT never responds
+        2. If no human operators are available -> ChatGPT responds
+        3. If ChatGPT conversation is already active -> ChatGPT continues responding
+        4. If human operators are available AND no active ChatGPT conversation -> ChatGPT stays silent
+        """
+        if self.channel_type != 'livechat' or not self.livechat_channel_id:
+            return False
+            
+        # MOST IMPORTANT: If a human operator has ever participated, ChatGPT should never respond
+        if self._has_human_operator_participated():
+            session_key = self._get_session_key(msg_vals)
+            _logger.debug(f"Human operator has participated in channel {self.id}, session {session_key}. ChatGPT will not respond.")
+            return False
+            
+        # Check if there are available human operators
+        livechat_channel = self.env['im_livechat.channel'].browse(self.livechat_channel_id.id)
+        user_chatgpt_ref = self.env.ref("chatgpt_assistant_discuss_integration.user_chatgpt")
+        available_operators = livechat_channel.available_operator_ids.filtered(lambda u: u.id != user_chatgpt_ref.id)
+        has_available_operators = len(available_operators) > 0
+        
+        # Check if ChatGPT conversation is already active for this session
+        session_key = self._get_session_key(msg_vals)
+        chatgpt_conversation_active = self._is_chatgpt_conversation_active(session_key)
+        
+        # ChatGPT should respond if:
+        # 1. No human operators are available, OR
+        # 2. ChatGPT conversation is already active (continue until human takes over)
+        should_respond = not has_available_operators or chatgpt_conversation_active
+        
+        _logger.debug(f"ChatGPT response decision for session {session_key}: "
+                     f"has_operators={has_available_operators}, "
+                     f"conversation_active={chatgpt_conversation_active}, "
+                     f"should_respond={should_respond}")
+        
+        return should_respond
+
+    def _handoff_conversation_to_human(self, session_key):
+        """Hand off a ChatGPT conversation to a human operator"""
+        if not session_key:
+            return
+        try:
+            active_conversations = json.loads(self.chatgpt_active_conversations or '{}')
+            if session_key in active_conversations:
+                active_conversations.pop(session_key)
+                self.sudo().write({'chatgpt_active_conversations': json.dumps(active_conversations)})
+                _logger.info(f"Handed off ChatGPT conversation to human for session {session_key} in channel {self.id}")
+                
+                # Optionally, you can also reset the ChatGPT thread since the conversation is handed off
+                # self.reset_chatgpt_thread(session_key=session_key)
+        except (json.JSONDecodeError, TypeError):
+            _logger.error(f"Error during conversation handoff for session {session_key} in channel {self.id}")
