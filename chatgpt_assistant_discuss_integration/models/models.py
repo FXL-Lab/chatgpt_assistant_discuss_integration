@@ -331,6 +331,35 @@ class Channel(models.Model):
         # Apply target="_blank" to markdown-generated links
         html_text = add_target_blank_to_links(html_text)
         
+        # Phone number linkification
+        def replace_phone_numbers(text):
+            # Split by HTML tags to avoid processing content inside tags
+            parts = re.split(r'(<[^>]*>)', text)
+            result_parts = []
+            
+            # Pattern for international phone numbers with + prefix
+            # Matches: +421 907 187 800, +1 (555) 123-4567, +44-20-1234-5678, etc.
+            # Requires at least 7 digits total (minimum phone number length)
+            phone_pattern = r'\+\d{1,4}[\s\-\.\(\)]*(?:\d[\s\-\.\(\)]*){6,14}\d'
+            
+            for i, part in enumerate(parts):
+                # Only process text parts (odd indices), not HTML tags
+                if i % 2 == 0:
+                    def replace_phone(match):
+                        phone_display = match.group(0)
+                        # Strip all formatting for the tel: URI (keep only + and digits)
+                        phone_uri = re.sub(r'[^\d+]', '', phone_display)
+                        return f'<a href="tel:{phone_uri}">{phone_display}</a>'
+                    
+                    part = re.sub(phone_pattern, replace_phone, part)
+                
+                result_parts.append(part)
+            
+            return ''.join(result_parts)
+        
+        # Apply phone number linkification
+        html_text = replace_phone_numbers(html_text)
+        
         # Additional URL linkification for URLs not in markdown links
         # This handles plain URLs that aren't already in [text](url) format
         def replace_urls_not_in_html(text):
