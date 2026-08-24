@@ -13,8 +13,8 @@
                             <field name="chatgpt_api_key"/>
                         </setting>
 
-                        <setting id="assistant_id_setting">
-                            <field name="assistant_id"/>
+                        <setting id="prompt_id_setting">
+                            <field name="prompt_id"/>
                         </setting>
 
                         <setting id="enable_chatgpt_assistant_setting">

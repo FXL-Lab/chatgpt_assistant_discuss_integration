@@ -11,8 +11,8 @@
                         <span>Enable ChatGPT Assistant</span>
                     </div>
                     <div>
-                        <span>Assistant ID:</span>
-                        <field name="assistant_id" style="border-bottom: 1px solid #ccc;"/>
+                        <span>Prompt ID:</span>
+                        <field name="prompt_id" style="border-bottom: 1px solid #ccc;"/>
                     </div>
                 </xpath>
             </field>
