@@ -11,9 +11,9 @@ class ImLivechatChannel(models.Model):
         string="Enable ChatGPT Assistant in this channel",
         default=False,
     )
-    assistant_id = fields.Char(
-        string="Assistant ID",
-        help="ID of the assistant to be used in this channel.",
+    prompt_id = fields.Char(
+        string="Prompt ID",
+        help="ID of the OpenAI dashboard prompt to use in this channel.",
         default=''
     )
 

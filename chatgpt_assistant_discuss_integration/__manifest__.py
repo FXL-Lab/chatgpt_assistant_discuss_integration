@@ -13,7 +13,7 @@
     'author': "FXL Technologies",
     'website': "https://fxltech.com",
     'category': 'Website',
-    'version': '0.3',
+    'version': '0.4',
 
     'depends': ['base', 'base_setup', 'mail', 'im_livechat'],
     'external_dependencies': {'python': ['openai', 'markdown']},

@@ -28,10 +28,10 @@ class ResConfigSettings(models.TransientModel):
         help="Provide ChatGPT API key here",
         config_parameter="chatgpt_assistant_discuss_integration.chatgpt_api_key"
     )
-    assistant_id = fields.Char(
-        string="Assistant ID",
-        help="Provide Assistant ID here",
-        config_parameter="chatgpt_assistant_discuss_integration.assistant_id"
+    prompt_id = fields.Char(
+        string="Prompt ID",
+        help="Provide the OpenAI dashboard prompt ID used for responses",
+        config_parameter="chatgpt_assistant_discuss_integration.prompt_id"
     )
 
 
@@ -50,10 +50,10 @@ class Channel(models.Model):
         default=True,
     )
     
-    # Store thread IDs per session/user for proper conversation management
-    chatgpt_thread_sessions = fields.Text(
-        string="ChatGPT Thread Sessions",
-        help="JSON mapping of session/user IDs to OpenAI thread IDs",
+    # Store conversation IDs per session/user for OpenAI Responses API context.
+    chatgpt_conversation_sessions = fields.Text(
+        string="ChatGPT Conversation Sessions",
+        help="JSON mapping of session/user IDs to OpenAI conversation IDs",
         default='{}',
     )
     
@@ -93,16 +93,16 @@ class Channel(models.Model):
             'chat ended' in body.lower()):
             self.should_generate_chatgpt_response = False
             _logger.info(f"Session ending detected: {body}")
-            # Reset the thread for this specific session when user leaves
+            # Reset the conversation for this specific session when user leaves
             session_key = self._get_session_key(msg_vals)
-            self.reset_chatgpt_thread(session_key=session_key)
+            self.reset_chatgpt_conversation(session_key=session_key)
             return result
         if isinstance(msg_vals.get('body'), Markup) and str(msg_vals.get('body')).startswith('<p>Rating:'):
             self.should_generate_chatgpt_response = False
             _logger.info("Message is a rating")
-            # Reset thread after rating (conversation typically ends after rating)
+            # Reset the conversation after rating (conversation typically ends after rating)
             session_key = self._get_session_key(msg_vals)
-            self.reset_chatgpt_thread(session_key=session_key)
+            self.reset_chatgpt_conversation(session_key=session_key)
             return result
 
         if self.channel_type == 'livechat':
@@ -111,7 +111,7 @@ class Channel(models.Model):
                 _logger.info("Livechat channel is disabled for ChatGPT assistant response")
                 return result
             else:
-                assistant_id = self.env['im_livechat.channel'].browse(self.livechat_channel_id.id).assistant_id
+                prompt_id = self.env['im_livechat.channel'].browse(self.livechat_channel_id.id).prompt_id
                 _logger.info("Livechat channel is enabled for ChatGPT assistant response")
         else:
             _logger.info("Channel is not livechat")
@@ -156,12 +156,13 @@ class Channel(models.Model):
                 or should_chatgpt_respond_livechat
         )
 
-        try:
-            if self.should_generate_chatgpt_response:
-                self.chatgpt_message_text = self._get_chatgpt_response(prompt=prompt, assistant_id=assistant_id, msg_vals=msg_vals)
-        except Exception as e:
-            _logger.error(f"message_post_after_hook: {e}")
-            raise ValidationError(e)
+        if self.should_generate_chatgpt_response:
+            try:
+                self.chatgpt_message_text = self._get_chatgpt_response(prompt=prompt, prompt_id=prompt_id, msg_vals=msg_vals)
+            except Exception as e:
+                _logger.error(f"message_post_after_hook error: {e}")
+                # Set friendly error message instead of raising
+                self.chatgpt_message_text = "Sorry, I'm experiencing technical difficulties. Please try again later."
 
         return result
 
@@ -180,35 +181,34 @@ class Channel(models.Model):
             session_key = f"channel_{self.id}_user_{author_id}"
         return session_key
 
-    def _get_thread_for_session(self, session_key, client):
-        """Get or create an OpenAI thread for a specific session"""
+    def _get_conversation_for_session(self, session_key, client):
+        """Get or create an OpenAI conversation for a specific session."""
         try:
-            thread_sessions = json.loads(self.chatgpt_thread_sessions or '{}')
+            conversation_sessions = json.loads(self.chatgpt_conversation_sessions or '{}')
         except (json.JSONDecodeError, TypeError):
-            thread_sessions = {}
+            conversation_sessions = {}
         
-        thread_id = thread_sessions.get(session_key)
+        conversation_id = conversation_sessions.get(session_key)
         
-        if not thread_id:
-            # Create new thread for this session
-            thread = client.beta.threads.create()
-            thread_id = thread.id
-            thread_sessions[session_key] = thread_id
-            self.sudo().write({'chatgpt_thread_sessions': json.dumps(thread_sessions)})
-            _logger.info(f"Created new OpenAI thread {thread_id} for session {session_key} in channel {self.id}")
+        if not conversation_id:
+            conversation = client.conversations.create()
+            conversation_id = conversation.id
+            conversation_sessions[session_key] = conversation_id
+            self.sudo().write({'chatgpt_conversation_sessions': json.dumps(conversation_sessions)})
+            _logger.info(f"Created new OpenAI conversation {conversation_id} for session {session_key} in channel {self.id}")
         else:
-            _logger.info(f"Using existing OpenAI thread {thread_id} for session {session_key} in channel {self.id}")
+            _logger.info(f"Using existing OpenAI conversation {conversation_id} for session {session_key} in channel {self.id}")
         
-        return thread_id, thread_sessions
+        return conversation_id, conversation_sessions
 
-    def _cleanup_invalid_thread(self, session_key, thread_sessions, client):
-        """Remove invalid thread and create a new one"""
-        thread = client.beta.threads.create()
-        thread_id = thread.id
-        thread_sessions[session_key] = thread_id
-        self.sudo().write({'chatgpt_thread_sessions': json.dumps(thread_sessions)})
-        _logger.warning(f"Created replacement thread {thread_id} for session {session_key} in channel {self.id}")
-        return thread_id
+    def _replace_invalid_conversation(self, session_key, conversation_sessions, client):
+        """Replace a deleted or invalid OpenAI conversation for a session."""
+        conversation = client.conversations.create()
+        conversation_id = conversation.id
+        conversation_sessions[session_key] = conversation_id
+        self.sudo().write({'chatgpt_conversation_sessions': json.dumps(conversation_sessions)})
+        _logger.warning(f"Created replacement conversation {conversation_id} for session {session_key} in channel {self.id}")
+        return conversation_id
 
     def _notify_thread(self, message, msg_vals, **kwargs):
         try:
@@ -230,8 +230,11 @@ class Channel(models.Model):
             session_key = self._get_session_key(msg_vals)
             self._handoff_conversation_to_human(session_key)
 
+        # If we have a ChatGPT response ready, post it
         if not self.should_generate_chatgpt_response or not self.chatgpt_message_text:
             return rdata
+        
+        user_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.user_chatgpt")
         chatgpt_name = str(partner_chatgpt.name or '') + ', '
         chatgpt_channel_id = self.env.ref('chatgpt_assistant_discuss_integration.channel_chatgpt')
 
@@ -247,40 +250,21 @@ class Channel(models.Model):
                 and msg_vals.get('res_id', 0) == chatgpt_channel_id.id
         )
 
-        # Use new conversation handoff logic for livechat
-        should_chatgpt_respond_livechat = (
-                author_id != partner_chatgpt.id
-                and (not self.env.user
-                     or (
-                             not self.env.user.has_group('im_livechat.im_livechat_group_user')
-                             and not self.env.user.has_group('im_livechat.im_livechat_group_manager')
-                     )
-                     )
-                and self.channel_type == 'livechat'
-                and self._should_chatgpt_respond(msg_vals)  # Use new handoff logic
-        )
-
-        user_chatgpt = self.env.ref("chatgpt_assistant_discuss_integration.user_chatgpt")
-
-        if (
-                is_chatgpt_private_channel
-        ):
+        # Post the response based on channel type
+        if is_chatgpt_private_channel:
             self.with_user(user_chatgpt).message_post(
                 body=Markup(self._linkify_text(self.chatgpt_message_text)),
                 message_type='comment',
                 subtype_xmlid='mail.mt_comment'
             )
-        elif (
-                is_chatgpt_public_channel
-        ):
+        elif is_chatgpt_public_channel:
             chatgpt_channel_id.with_user(user_chatgpt).message_post(
                 body=Markup(self._linkify_text(self.chatgpt_message_text)),
                 message_type='comment',
                 subtype_xmlid='mail.mt_comment'
             )
-        elif (
-                should_chatgpt_respond_livechat
-        ):
+        elif self.channel_type == 'livechat':
+            # For livechat, always post if we generated a response (including error messages)
             self.with_user(user_chatgpt).sudo().message_post(
                 body=Markup(self._linkify_text(self.chatgpt_message_text)),
                 message_type='comment',
@@ -386,115 +370,87 @@ class Channel(models.Model):
         
         return processed_text
 
-    def _get_chatgpt_response(self, prompt, assistant_id=None, msg_vals=None):
+    def _get_chatgpt_response(self, prompt, prompt_id=None, msg_vals=None):
         config_parameter = self.env['ir.config_parameter'].sudo()
         chatgpt_api_key = config_parameter.get_param('chatgpt_assistant_discuss_integration.chatgpt_api_key')
-        if not assistant_id:
-            assistant_id = config_parameter.get_param('chatgpt_assistant_discuss_integration.assistant_id')
+        if not prompt_id:
+            prompt_id = config_parameter.get_param('chatgpt_assistant_discuss_integration.prompt_id')
+
+        if not prompt_id:
+            _logger.error("No OpenAI prompt ID configured")
+            return "The chat assistant is not configured. Please contact an administrator."
         
         try:
             client = OpenAI(api_key=chatgpt_api_key)
-            
-            # Get session-specific thread ID
             session_key = self._get_session_key(msg_vals)
-            thread_id, thread_sessions = self._get_thread_for_session(session_key, client)
+            conversation_id, conversation_sessions = self._get_conversation_for_session(session_key, client)
+
+            max_retries = 2
             
-            try:
-                client.beta.threads.messages.create(
-                    thread_id=thread_id,
-                    role="user",
-                    content=prompt,
-                )
-            except Exception as e:
-                _logger.error(f"_get_chatgpt_response error messages: {e}")
-                # If thread is invalid, create a new one
-                if "No thread found" in str(e) or "thread" in str(e).lower():
-                    _logger.warning(f"Thread {thread_id} not found for session {session_key}, creating new thread")
-                    thread_id = self._cleanup_invalid_thread(session_key, thread_sessions, client)
-                    client.beta.threads.messages.create(
-                        thread_id=thread_id,
-                        role="user",
-                        content=prompt,
+            for retry in range(max_retries):
+                try:
+                    response = client.responses.create(
+                        prompt={'id': prompt_id},
+                        input=[{'role': 'user', 'content': prompt}],
+                        conversation=conversation_id,
                     )
-                else:
-                    return ""
-            
-            # Handle rate limiting with retries
-            wait_time = 10
-            for i in range(5):
-                run = client.beta.threads.runs.create(
-                    thread_id=thread_id,
-                    assistant_id=assistant_id,
-                )
-                
-                while run.status in ['queued', 'in_progress', 'cancelling']:
-                    time.sleep(1)  # Wait for 1 second
-                    run = client.beta.threads.runs.retrieve(
-                        thread_id=thread_id,
-                        run_id=run.id
-                    )
-                
-                if run.status == 'failed':
-                    if run.last_error and run.last_error.code == 'rate_limit_exceeded':
-                        _logger.warning(f"Rate limit exceeded for session {session_key}, waiting for {wait_time} seconds")
-                        time.sleep(wait_time)
-                        wait_time += 5
-                        continue
-                    _logger.error(f"Run error for session {session_key}: {run.last_error}")
-                    raise RuntimeError(run.last_error.code if run.last_error else "Unknown error")
-                
-                if run.status == 'completed':
-                    messages = client.beta.threads.messages.list(thread_id=thread_id)
-                    msg = messages.data[0].content[0].text.value
-                    _logger.info(f"ChatGPT response for session {session_key}: {msg}")
-                    
-                    # Mark this conversation as active for ChatGPT
+                    if response.status != 'completed' or not response.output_text:
+                        _logger.error(f"Response status error for session {session_key}: {response.status}")
+                        raise RuntimeError(response.error.message if response.error else f"Unexpected response status: {response.status}")
+
+                    message_text = response.output_text
+                    _logger.info(f"ChatGPT response for session {session_key}: {message_text}")
                     self._mark_chatgpt_conversation_active(session_key)
-                    
-                    # Return the message text directly without backend processing
-                    # Let the frontend handle URL linkification naturally
-                    return msg
-                else:
-                    _logger.error(f"Run status error for session {session_key}: {run.status}")
-                    if run.last_error:
-                        _logger.error(f"Run error: {run.last_error}")
-                        raise RuntimeError(run.last_error.code)
-                    else:
-                        raise RuntimeError(f"Unknown run status: {run.status}")
+                    return message_text
+                            
+                except Exception as e:
+                    if "conversation" in str(e).lower() and ("not found" in str(e).lower() or "invalid" in str(e).lower()):
+                        _logger.warning(f"Conversation {conversation_id} is invalid for session {session_key}, creating a replacement")
+                        conversation_id = self._replace_invalid_conversation(session_key, conversation_sessions, client)
+                        continue
+                    if "rate_limit" in str(e).lower() and retry < max_retries - 1:
+                        wait_time = 10
+                        _logger.warning(f"Rate limit error during API call for session {session_key}, waiting {wait_time}s before retry {retry + 1}/{max_retries}")
+                        time.sleep(wait_time)
+                        continue
+                    elif "rate_limit" in str(e).lower():
+                        # Final retry exhausted for rate limit
+                        _logger.error(f"Rate limit exceeded during API call after {max_retries} retries for session {session_key}")
+                        return "I'm receiving too many requests right now. Please wait a moment and send your message again."
+                    raise
         
         except Exception as e:
             _logger.error(f"_get_chatgpt_response error for session {session_key}: {e}")
-            raise RuntimeError('Chatbot error, please try again later.')
+            # Return friendly message instead of raising error
+            return "Sorry, I'm having trouble responding right now. Please try again in a moment."
 
-    def reset_chatgpt_thread(self, session_key=None):
-        """Reset the ChatGPT thread(s) for this channel to start fresh conversation(s)"""
+    def reset_chatgpt_conversation(self, session_key=None):
+        """Reset the ChatGPT conversation(s) for this channel."""
         if session_key:
-            # Reset specific session thread
             try:
-                thread_sessions = json.loads(self.chatgpt_thread_sessions or '{}')
-                if session_key in thread_sessions:
-                    removed_thread = thread_sessions.pop(session_key)
-                    self.sudo().write({'chatgpt_thread_sessions': json.dumps(thread_sessions)})
-                    _logger.info(f"Reset ChatGPT thread {removed_thread} for session {session_key} in channel {self.id}")
+                conversation_sessions = json.loads(self.chatgpt_conversation_sessions or '{}')
+                if session_key in conversation_sessions:
+                    removed_conversation = conversation_sessions.pop(session_key)
+                    self.sudo().write({'chatgpt_conversation_sessions': json.dumps(conversation_sessions)})
+                    _logger.info(f"Reset ChatGPT conversation {removed_conversation} for session {session_key} in channel {self.id}")
                     return True
                 else:
-                    _logger.warning(f"No thread found for session {session_key} in channel {self.id}")
+                    _logger.warning(f"No conversation found for session {session_key} in channel {self.id}")
                     return False
             except (json.JSONDecodeError, TypeError):
-                _logger.error(f"Invalid thread sessions data in channel {self.id}")
+                _logger.error(f"Invalid conversation sessions data in channel {self.id}")
                 return False
         else:
-            # Reset all sessions for this channel
-            thread_count = 0
+            conversation_count = 0
             try:
-                thread_sessions = json.loads(self.chatgpt_thread_sessions or '{}')
-                thread_count = len(thread_sessions)
+                conversation_sessions = json.loads(self.chatgpt_conversation_sessions or '{}')
+                conversation_count = len(conversation_sessions)
             except (json.JSONDecodeError, TypeError):
                 pass
             
-            self.sudo().write({'chatgpt_thread_sessions': '{}'})
+            self.sudo().write({'chatgpt_conversation_sessions': '{}'})
             
-            _logger.info(f"Reset all {thread_count} ChatGPT threads for channel {self.id}")
+            _logger.info(f"Reset all {conversation_count} ChatGPT conversations for channel {self.id}")
             return True
 
     def _is_chatgpt_conversation_active(self, session_key):
@@ -604,7 +560,7 @@ class Channel(models.Model):
                 self.sudo().write({'chatgpt_active_conversations': json.dumps(active_conversations)})
                 _logger.info(f"Handed off ChatGPT conversation to human for session {session_key} in channel {self.id}")
                 
-                # Optionally, you can also reset the ChatGPT thread since the conversation is handed off
-                # self.reset_chatgpt_thread(session_key=session_key)
+                # Optionally, reset the ChatGPT conversation after a handoff.
+                # self.reset_chatgpt_conversation(session_key=session_key)
         except (json.JSONDecodeError, TypeError):
             _logger.error(f"Error during conversation handoff for session {session_key} in channel {self.id}")
