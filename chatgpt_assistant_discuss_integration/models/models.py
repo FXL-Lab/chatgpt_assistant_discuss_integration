@@ -8,7 +8,7 @@ import markdown
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 from markupsafe import Markup
 
 _logger = logging.getLogger(__name__)
@@ -376,13 +376,18 @@ class Channel(models.Model):
         if not prompt_id:
             prompt_id = config_parameter.get_param('chatgpt_assistant_discuss_integration.prompt_id')
 
-        if not prompt_id:
-            _logger.error("No OpenAI prompt ID configured")
+        if not chatgpt_api_key or not chatgpt_api_key.strip():
+            _logger.error("OpenAI request skipped: no API key is configured for channel %s", self.id)
             return "The chat assistant is not configured. Please contact an administrator."
-        
+
+        if not prompt_id:
+            _logger.error("OpenAI request skipped: no prompt ID is configured for channel %s", self.id)
+            return "The chat assistant is not configured. Please contact an administrator."
+
+        session_key = self._get_session_key(msg_vals or {})
+
         try:
             client = OpenAI(api_key=chatgpt_api_key)
-            session_key = self._get_session_key(msg_vals)
             conversation_id, conversation_sessions = self._get_conversation_for_session(session_key, client)
 
             max_retries = 2
@@ -403,25 +408,43 @@ class Channel(models.Model):
                     self._mark_chatgpt_conversation_active(session_key)
                     return message_text
                             
-                except Exception as e:
-                    if "conversation" in str(e).lower() and ("not found" in str(e).lower() or "invalid" in str(e).lower()):
+                except Exception as error:
+                    if "conversation" in str(error).lower() and ("not found" in str(error).lower() or "invalid" in str(error).lower()):
                         _logger.warning(f"Conversation {conversation_id} is invalid for session {session_key}, creating a replacement")
                         conversation_id = self._replace_invalid_conversation(session_key, conversation_sessions, client)
                         continue
-                    if "rate_limit" in str(e).lower() and retry < max_retries - 1:
+                    if isinstance(error, RateLimitError) and retry < max_retries - 1:
                         wait_time = 10
                         _logger.warning(f"Rate limit error during API call for session {session_key}, waiting {wait_time}s before retry {retry + 1}/{max_retries}")
                         time.sleep(wait_time)
                         continue
-                    elif "rate_limit" in str(e).lower():
+                    elif isinstance(error, RateLimitError):
                         # Final retry exhausted for rate limit
                         _logger.error(f"Rate limit exceeded during API call after {max_retries} retries for session {session_key}")
                         return "I'm receiving too many requests right now. Please wait a moment and send your message again."
                     raise
-        
-        except Exception as e:
-            _logger.error(f"_get_chatgpt_response error for session {session_key}: {e}")
-            # Return friendly message instead of raising error
+
+        except (APITimeoutError, APIConnectionError) as error:
+            _logger.exception(
+                "OpenAI network failure for channel %s, session %s: %s",
+                self.id, session_key, type(error).__name__,
+            )
+            return "The chat assistant is temporarily unavailable. Please try again in a moment."
+        except APIStatusError as error:
+            _logger.exception(
+                "OpenAI API failure for channel %s, session %s: status=%s, request_id=%s, error=%s",
+                self.id, session_key, error.status_code, error.request_id, type(error).__name__,
+            )
+            if error.status_code in (401, 403):
+                return "The chat assistant is not configured correctly. Please contact an administrator."
+            if error.status_code >= 500:
+                return "The chat assistant is temporarily unavailable. Please try again in a moment."
+            return "The chat assistant could not process this message. Please try again in a moment."
+        except Exception as error:
+            _logger.exception(
+                "Unexpected OpenAI integration failure for channel %s, session %s: %s",
+                self.id, session_key, type(error).__name__,
+            )
             return "Sorry, I'm having trouble responding right now. Please try again in a moment."
 
     def reset_chatgpt_conversation(self, session_key=None):
