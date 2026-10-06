@@ -82,18 +82,11 @@ class Channel(models.Model):
             self.should_generate_chatgpt_response = False
             return result
 
-        # Check for various session ending patterns
-        body = msg_vals.get('body', '') # left the conversation.
-        if (body.endswith('has left the conversation.') or 
-            body.endswith('has ended the conversation.') or
-            body.endswith('session has ended.') or
-            'conversation closed' in body.lower() or
-            'left the conversation.' in body.lower() or
-            'img class="o_livechat_emoji_rating"' in body.lower() or
-            'chat ended' in body.lower()):
+        # Odoo 18 deactivates the session before posting the localized leave notification.
+        _logger.info("livechat_active: %s", self.livechat_active)
+        if self.channel_type == 'livechat' and not self.livechat_active:
             self.should_generate_chatgpt_response = False
-            _logger.info(f"Session ending detected: {body}")
-            # Reset the conversation for this specific session when user leaves
+            _logger.info("Closed livechat session detected for channel %s", self.id)
             session_key = self._get_session_key(msg_vals)
             self.reset_chatgpt_conversation(session_key=session_key)
             return result
