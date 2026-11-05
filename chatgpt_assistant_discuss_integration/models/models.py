@@ -14,6 +14,23 @@ from markupsafe import Markup
 _logger = logging.getLogger(__name__)
 
 
+def _get_openai_model_options(env, current_values=()):
+    config_parameter = env['ir.config_parameter'].sudo()
+    try:
+        model_ids = json.loads(config_parameter.get_param(
+            'chatgpt_assistant_discuss_integration.available_models', '[]'
+        ))
+    except (json.JSONDecodeError, TypeError):
+        model_ids = []
+
+    values = {model_id for model_id in model_ids if isinstance(model_id, str) and model_id}
+    values.update(model_id for model_id in current_values if isinstance(model_id, str) and model_id)
+    default_model = config_parameter.get_param('chatgpt_assistant_discuss_integration.default_model')
+    if default_model:
+        values.add(default_model)
+    return [(model_id, model_id) for model_id in sorted(values)]
+
+
 class ResConfigSettings(models.TransientModel):
     _inherit = "res.config.settings"
 
@@ -28,11 +45,81 @@ class ResConfigSettings(models.TransientModel):
         help="Provide ChatGPT API key here",
         config_parameter="chatgpt_assistant_discuss_integration.chatgpt_api_key"
     )
+    chatgpt_default_model = fields.Selection(
+        selection=lambda self: _get_openai_model_options(
+            self.env, self.mapped('chatgpt_default_model')
+        ),
+        string="Default OpenAI Model",
+        help="Model used for ChatGPT responses unless a livechat channel overrides it",
+        config_parameter="chatgpt_assistant_discuss_integration.default_model"
+    )
+    chatgpt_default_instructions = fields.Text(
+        string="Default Assistant Instructions",
+        help="Instructions used unless a livechat channel provides its own",
+    )
+    chatgpt_models_last_updated = fields.Char(
+        string="Models Last Refreshed",
+        config_parameter="chatgpt_assistant_discuss_integration.models_last_updated",
+        readonly=True,
+    )
     prompt_id = fields.Char(
         string="Prompt ID",
         help="Provide the OpenAI dashboard prompt ID used for responses",
         config_parameter="chatgpt_assistant_discuss_integration.prompt_id"
     )
+
+    @api.model
+    def get_values(self):
+        values = super().get_values()
+        values.update(
+            chatgpt_default_instructions=self.env['ir.config_parameter'].sudo().get_param(
+                'chatgpt_assistant_discuss_integration.default_instructions', ''
+            )
+        )
+        return values
+
+    def set_values(self):
+        super().set_values()
+        self.env['ir.config_parameter'].sudo().set_param(
+            'chatgpt_assistant_discuss_integration.default_instructions',
+            self.chatgpt_default_instructions or '',
+        )
+
+    def action_refresh_openai_models(self):
+        self.ensure_one()
+        if not self.env.is_admin():
+            raise UserError(_("Only administrators can refresh OpenAI models."))
+
+        self.set_values()
+        config_parameter = self.env['ir.config_parameter'].sudo()
+        api_key = config_parameter.get_param('chatgpt_assistant_discuss_integration.chatgpt_api_key')
+        if not api_key:
+            raise UserError(_("Configure the OpenAI API key before refreshing models."))
+
+        try:
+            response_models = OpenAI(api_key=api_key, timeout=20.0).models.list()
+        except Exception as error:
+            _logger.exception("Could not retrieve OpenAI models")
+            raise UserError(_("Could not retrieve models from OpenAI. Check the API key and connection.")) from error
+
+        excluded_terms = ('realtime', 'audio', 'transcribe', 'tts', 'embedding', 'moderation', 'dall-e', 'image', 'sora')
+        supported_prefixes = ('gpt-', 'o1', 'o3', 'o4', 'chatgpt-', 'ft:gpt-', 'ft:o1', 'ft:o3', 'ft:o4')
+        model_ids = sorted({
+            model.id for model in response_models
+            if model.id.startswith(supported_prefixes)
+            and not any(term in model.id.lower() for term in excluded_terms)
+        })
+        if not model_ids:
+            raise UserError(_("No supported text-generation models were returned by OpenAI."))
+
+        config_parameter.set_param(
+            'chatgpt_assistant_discuss_integration.available_models', json.dumps(model_ids)
+        )
+        config_parameter.set_param(
+            'chatgpt_assistant_discuss_integration.models_last_updated',
+            fields.Datetime.to_string(fields.Datetime.now()),
+        )
+        return {'type': 'ir.actions.client', 'tag': 'reload'}
 
 
 class Channel(models.Model):
@@ -104,7 +191,9 @@ class Channel(models.Model):
                 _logger.info("Livechat channel is disabled for ChatGPT assistant response")
                 return result
             else:
-                prompt_id = self.env['im_livechat.channel'].browse(self.livechat_channel_id.id).prompt_id
+                livechat_channel = self.env['im_livechat.channel'].browse(self.livechat_channel_id.id)
+                model = livechat_channel.chatgpt_model
+                instructions = livechat_channel.chatgpt_instructions
                 _logger.info("Livechat channel is enabled for ChatGPT assistant response")
         else:
             _logger.info("Channel is not livechat")
@@ -151,7 +240,12 @@ class Channel(models.Model):
 
         if self.should_generate_chatgpt_response:
             try:
-                self.chatgpt_message_text = self._get_chatgpt_response(prompt=prompt, prompt_id=prompt_id, msg_vals=msg_vals)
+                self.chatgpt_message_text = self._get_chatgpt_response(
+                    prompt=prompt,
+                    model=model,
+                    instructions=instructions,
+                    msg_vals=msg_vals,
+                )
             except Exception as e:
                 _logger.error(f"message_post_after_hook error: {e}")
                 # Set friendly error message instead of raising
@@ -363,18 +457,20 @@ class Channel(models.Model):
         
         return processed_text
 
-    def _get_chatgpt_response(self, prompt, prompt_id=None, msg_vals=None):
+    def _get_chatgpt_response(self, prompt, model=None, instructions=None, msg_vals=None):
         config_parameter = self.env['ir.config_parameter'].sudo()
         chatgpt_api_key = config_parameter.get_param('chatgpt_assistant_discuss_integration.chatgpt_api_key')
-        if not prompt_id:
-            prompt_id = config_parameter.get_param('chatgpt_assistant_discuss_integration.prompt_id')
+        model = model or config_parameter.get_param('chatgpt_assistant_discuss_integration.default_model')
+        instructions = instructions or config_parameter.get_param(
+            'chatgpt_assistant_discuss_integration.default_instructions'
+        )
 
         if not chatgpt_api_key or not chatgpt_api_key.strip():
             _logger.error("OpenAI request skipped: no API key is configured for channel %s", self.id)
             return "The chat assistant is not configured. Please contact an administrator."
 
-        if not prompt_id:
-            _logger.error("OpenAI request skipped: no prompt ID is configured for channel %s", self.id)
+        if not model or not instructions:
+            _logger.error("OpenAI request skipped: model or instructions are not configured for channel %s", self.id)
             return "The chat assistant is not configured. Please contact an administrator."
 
         session_key = self._get_session_key(msg_vals or {})
@@ -388,7 +484,8 @@ class Channel(models.Model):
             for retry in range(max_retries):
                 try:
                     response = client.responses.create(
-                        prompt={'id': prompt_id},
+                        model=model,
+                        instructions=instructions,
                         input=[{'role': 'user', 'content': prompt}],
                         conversation=conversation_id,
                     )

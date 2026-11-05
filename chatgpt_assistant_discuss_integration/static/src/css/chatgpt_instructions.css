@@ -1,0 +1,11 @@
+.chatgpt-instructions,
+.chatgpt-instructions > div {
+    max-height: 65vh;
+}
+
+.chatgpt-instructions textarea {
+    min-height: 22rem;
+    max-height: 65vh;
+    overflow-y: auto;
+    resize: vertical;
+}
