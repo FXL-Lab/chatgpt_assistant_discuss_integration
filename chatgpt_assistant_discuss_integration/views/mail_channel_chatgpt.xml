@@ -14,6 +14,10 @@
                         <field name="chatgpt_model"/>
                         <field name="chatgpt_instructions" widget="text" rows="16" class="chatgpt-instructions w-100"/>
                     </group>
+                    <group string="Inactivity Follow-up">
+                        <field name="chatgpt_inactivity_timeout"/>
+                        <field name="chatgpt_inactivity_system_prompt" widget="text" rows="12" class="chatgpt-instructions w-100"/>
+                    </group>
                 </xpath>
             </field>
         </record>

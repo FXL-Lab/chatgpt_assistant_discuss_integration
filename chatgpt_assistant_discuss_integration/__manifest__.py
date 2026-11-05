@@ -25,6 +25,7 @@
         'security/ir.model.access.csv',
         'data/mail_channel_data.xml',
         'data/user_partner_data.xml',
+        'data/inactivity_cron.xml',
         'views/res_config_settings_views.xml',
         'views/mail_channel_chatgpt.xml',
         'views/chatbot_script.xml'

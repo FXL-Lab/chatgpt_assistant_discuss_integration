@@ -1,6 +1,6 @@
 import logging
 from odoo import api, Command, fields, models
-from .models import _get_openai_model_options
+from .models import DEFAULT_CHATGPT_INACTIVITY_SYSTEM_PROMPT, _get_openai_model_options
 
 _logger = logging.getLogger(__name__)
 
@@ -27,6 +27,16 @@ class ImLivechatChannel(models.Model):
     chatgpt_instructions = fields.Text(
         string="ChatGPT Instructions",
         help="Instructions for ChatGPT in this channel. Uses the default instructions when empty.",
+    )
+    chatgpt_inactivity_timeout = fields.Integer(
+        string="Follow-up After (Minutes)",
+        help="Send one follow-up after this many minutes without a new message. Set to 0 to disable.",
+        default=0,
+    )
+    chatgpt_inactivity_system_prompt = fields.Text(
+        string="Inactivity System Prompt",
+        default=DEFAULT_CHATGPT_INACTIVITY_SYSTEM_PROMPT,
+        help="System instructions used to generate this channel's inactivity follow-up message.",
     )
 
     @api.depends('user_ids.im_status')
