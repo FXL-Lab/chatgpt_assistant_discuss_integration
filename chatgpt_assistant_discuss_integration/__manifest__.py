@@ -15,8 +15,8 @@
     'category': 'Website',
     'version': '0.6',
 
-    'depends': ['base', 'base_setup', 'mail', 'im_livechat'],
-    'external_dependencies': {'python': ['openai', 'markdown']},
+    'depends': ['base', 'base_setup', 'mail', 'im_livechat', 'website_livechat'],
+    'external_dependencies': {'python': ['openai', 'markdown', 'phonenumbers']},
 
     'license': 'LGPL-3',
     'maintainer': 'Elias Owis',

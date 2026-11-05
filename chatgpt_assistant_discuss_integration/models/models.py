@@ -6,14 +6,16 @@ import re
 import time
 import markdown
 from datetime import timedelta
+import phonenumbers
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
-from odoo.tools import html2plaintext
+from odoo.tools import email_normalize, html2plaintext
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 from markupsafe import Markup
 
 _logger = logging.getLogger(__name__)
+_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 
 DEFAULT_CHATGPT_INACTIVITY_SYSTEM_PROMPT = (
     "Write one brief, friendly check-in message for the visitor who has not replied. "
@@ -181,6 +183,8 @@ class Channel(models.Model):
                 'chatgpt_last_message_at': fields.Datetime.now(),
                 'chatgpt_inactivity_followup_sent': False,
             })
+            if self.channel_type == 'livechat':
+                self._capture_visitor_contact_details(message)
 
         config_parameter = self.env['ir.config_parameter'].sudo()
         enable_chatgpt_assistant_response = config_parameter.get_param(
@@ -277,6 +281,62 @@ class Channel(models.Model):
                 self.chatgpt_message_text = "Sorry, I'm experiencing technical difficulties. Please try again later."
 
         return result
+
+    def _capture_visitor_contact_details(self, message):
+        self.ensure_one()
+        visitor = self.livechat_visitor_id.sudo()
+        if not visitor or message.message_type != 'comment':
+            return
+
+        visitor_partner = visitor.partner_id.sudo()
+        is_visitor_message = bool(message.author_guest_id) or bool(
+            visitor_partner and message.author_id == visitor_partner
+        )
+        if not is_visitor_message:
+            return
+
+        message_text = html2plaintext(message.body or '')
+        email_match = _EMAIL_PATTERN.search(message_text)
+        email = email_normalize(email_match.group(0)) if email_match else False
+
+        country_code = visitor.country_id.code or (
+            visitor_partner.country_id.code if visitor_partner else None
+        ) or self.env.company.country_id.code or 'HU'
+        phone = False
+        try:
+            for match in phonenumbers.PhoneNumberMatcher(message_text, country_code):
+                if phonenumbers.is_valid_number(match.number):
+                    phone = phonenumbers.format_number(match.number, phonenumbers.PhoneNumberFormat.E164)
+                    break
+        except (phonenumbers.NumberParseException, ValueError):
+            _logger.debug("Could not parse a phone number in livechat channel %s", self.id)
+
+        if not email and not phone:
+            return
+
+        Partner = self.env['res.partner'].sudo()
+        partner = visitor.chatgpt_contact_partner_id.sudo() or visitor_partner
+        if not partner and email:
+            partner = Partner.search([('email_normalized', '=', email)], limit=1)
+        if not partner and phone:
+            partner = Partner.search(['|', ('phone', '=', phone), ('mobile', '=', phone)], limit=1)
+        if not partner:
+            partner = Partner.create({
+                'name': visitor_partner.name if visitor_partner else visitor.display_name,
+                'email': email or False,
+                'mobile': phone or False,
+            })
+        else:
+            values = {}
+            if email and not partner.email:
+                values['email'] = email
+            if phone and not (partner.phone or partner.mobile):
+                values['mobile'] = phone
+            if values:
+                partner.write(values)
+
+        if visitor.chatgpt_contact_partner_id != partner:
+            visitor.write({'chatgpt_contact_partner_id': partner.id})
 
     def _get_session_key(self, msg_vals):
         """Generate a unique session key for thread management"""
