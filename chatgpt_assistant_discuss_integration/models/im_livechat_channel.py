@@ -1,5 +1,6 @@
 import logging
 from odoo import api, Command, fields, models
+from .models import _get_openai_model_options
 
 _logger = logging.getLogger(__name__)
 
@@ -15,6 +16,17 @@ class ImLivechatChannel(models.Model):
         string="Prompt ID",
         help="ID of the OpenAI dashboard prompt to use in this channel.",
         default=''
+    )
+    chatgpt_model = fields.Selection(
+        selection=lambda self: _get_openai_model_options(
+            self.env, self.mapped('chatgpt_model')
+        ),
+        string="OpenAI Model",
+        help="Optional model override for ChatGPT responses in this channel.",
+    )
+    chatgpt_instructions = fields.Text(
+        string="ChatGPT Instructions",
+        help="Instructions for ChatGPT in this channel. Uses the default instructions when empty.",
     )
 
     @api.depends('user_ids.im_status')

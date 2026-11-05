@@ -29,6 +29,11 @@
         'views/mail_channel_chatgpt.xml',
         'views/chatbot_script.xml'
     ],
+    'assets': {
+        'web.assets_backend': [
+            'chatgpt_assistant_discuss_integration/static/src/css/chatgpt_instructions.css',
+        ],
+    },
     # 'assets': {
     #     'web.assets_backend': [
     #         'chatgpt_assistant_discuss_integration/static/src/components/*/*.js',

@@ -13,8 +13,19 @@
                             <field name="chatgpt_api_key"/>
                         </setting>
 
-                        <setting id="prompt_id_setting">
-                            <field name="prompt_id"/>
+                        <setting id="chatgpt_default_model_setting">
+                            <field name="chatgpt_default_model"/>
+                        </setting>
+
+                        <setting id="chatgpt_models_refresh_setting" string="Available OpenAI Models">
+                            <button name="action_refresh_openai_models" type="object" string="Refresh Models" class="btn btn-secondary"/>
+                            <div class="text-muted mt-2" invisible="not chatgpt_models_last_updated">
+                                Last refreshed: <field name="chatgpt_models_last_updated" readonly="1" class="oe_inline"/>
+                            </div>
+                        </setting>
+
+                        <setting id="chatgpt_default_instructions_setting">
+                            <field name="chatgpt_default_instructions" widget="text" rows="16" class="chatgpt-instructions w-100"/>
                         </setting>
 
                         <setting id="enable_chatgpt_assistant_setting">

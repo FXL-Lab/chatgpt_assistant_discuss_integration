@@ -10,10 +10,10 @@
                         <field name="enable_chatgpt_assistant_response_channel"/>
                         <span>Enable ChatGPT Assistant</span>
                     </div>
-                    <div>
-                        <span>Prompt ID:</span>
-                        <field name="prompt_id" style="border-bottom: 1px solid #ccc;"/>
-                    </div>
+                    <group>
+                        <field name="chatgpt_model"/>
+                        <field name="chatgpt_instructions" widget="text" rows="16" class="chatgpt-instructions w-100"/>
+                    </group>
                 </xpath>
             </field>
         </record>
