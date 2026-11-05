@@ -5,13 +5,20 @@ import logging
 import re
 import time
 import markdown
+from datetime import timedelta
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
+from odoo.tools import html2plaintext
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 from markupsafe import Markup
 
 _logger = logging.getLogger(__name__)
+
+DEFAULT_CHATGPT_INACTIVITY_SYSTEM_PROMPT = (
+    "Write one brief, friendly check-in message for the visitor who has not replied. "
+    "Do not mention inactivity timers or invent details. Return only the message."
+)
 
 
 def _get_openai_model_options(env, current_values=()):
@@ -150,12 +157,30 @@ class Channel(models.Model):
         help="JSON mapping of session/user IDs to track if ChatGPT started the conversation",
         default='{}',
     )
+    chatgpt_last_message_at = fields.Datetime(
+        string="Last Chat Message",
+        copy=False,
+        index=True,
+    )
+    chatgpt_inactivity_followup_sent = fields.Boolean(
+        string="Inactivity Follow-up Sent",
+        default=False,
+        copy=False,
+    )
 
     def _message_post_after_hook(self, message, msg_vals):
         result = super(Channel, self)._message_post_after_hook(message, msg_vals=msg_vals)
 
         self.chatgpt_message_text = None
         self.should_generate_chatgpt_response = False
+        if self.env.context.get('chatgpt_inactivity_followup'):
+            return result
+
+        if msg_vals.get('message_type') == 'comment':
+            self.sudo().write({
+                'chatgpt_last_message_at': fields.Datetime.now(),
+                'chatgpt_inactivity_followup_sent': False,
+            })
 
         config_parameter = self.env['ir.config_parameter'].sudo()
         enable_chatgpt_assistant_response = config_parameter.get_param(
@@ -536,6 +561,104 @@ class Channel(models.Model):
                 self.id, session_key, type(error).__name__,
             )
             return "Sorry, I'm having trouble responding right now. Please try again in a moment."
+
+    @api.model
+    def _cron_send_inactivity_followups(self, limit=100):
+        config_parameter = self.env['ir.config_parameter'].sudo()
+        enabled = str(config_parameter.get_param(
+            'chatgpt_assistant_discuss_integration.enable_chatgpt_assistant_response', ''
+        )).lower() in {'1', 'true', 'yes', 'on'}
+        if not enabled:
+            return
+
+        channels = self.sudo().search([
+            ('channel_type', '=', 'livechat'),
+            ('livechat_active', '=', True),
+            ('chatgpt_inactivity_followup_sent', '=', False),
+            ('livechat_channel_id.enable_chatgpt_assistant_response_channel', '=', True),
+            ('livechat_channel_id.chatgpt_inactivity_timeout', '>', 0),
+        ], limit=limit)
+        now = fields.Datetime.now()
+        partner_chatgpt = self.env.ref('chatgpt_assistant_discuss_integration.partner_chatgpt')
+        user_chatgpt = self.env.ref('chatgpt_assistant_discuss_integration.user_chatgpt')
+
+        for channel in channels:
+            last_message_at = channel.chatgpt_last_message_at
+            if not last_message_at:
+                last_message = self.env['mail.message'].sudo().search([
+                    ('model', '=', 'discuss.channel'),
+                    ('res_id', '=', channel.id),
+                    ('message_type', '=', 'comment'),
+                ], order='date desc, id desc', limit=1)
+                last_message_at = last_message.date if last_message else channel.create_date
+                channel.write({'chatgpt_last_message_at': last_message_at})
+
+            timeout = channel.livechat_channel_id.chatgpt_inactivity_timeout
+            if not last_message_at or now - last_message_at < timedelta(minutes=timeout):
+                continue
+
+            followup = channel._get_inactivity_followup_message(partner_chatgpt)
+            if not followup:
+                continue
+
+            try:
+                channel.with_context(chatgpt_inactivity_followup=True).with_user(user_chatgpt).sudo().message_post(
+                    body=Markup(channel._linkify_text(followup)),
+                    message_type='comment',
+                    subtype_xmlid='mail.mt_comment',
+                )
+                channel.write({'chatgpt_inactivity_followup_sent': True})
+            except Exception:
+                _logger.exception("Failed to send inactivity follow-up for livechat channel %s", channel.id)
+
+    def _get_inactivity_followup_message(self, partner_chatgpt):
+        self.ensure_one()
+        livechat_channel = self.livechat_channel_id
+        config_parameter = self.env['ir.config_parameter'].sudo()
+        api_key = config_parameter.get_param('chatgpt_assistant_discuss_integration.chatgpt_api_key')
+        model = livechat_channel.chatgpt_model or config_parameter.get_param(
+            'chatgpt_assistant_discuss_integration.default_model'
+        )
+        instructions = livechat_channel.chatgpt_instructions or config_parameter.get_param(
+            'chatgpt_assistant_discuss_integration.default_instructions'
+        )
+        inactivity_system_prompt = (
+            livechat_channel.chatgpt_inactivity_system_prompt
+            or DEFAULT_CHATGPT_INACTIVITY_SYSTEM_PROMPT
+        )
+        if not api_key or not model or not instructions:
+            _logger.error("Cannot generate inactivity follow-up: OpenAI configuration is incomplete for channel %s", self.id)
+            return None
+
+        messages = self.env['mail.message'].sudo().search([
+            ('model', '=', 'discuss.channel'),
+            ('res_id', '=', self.id),
+            ('message_type', '=', 'comment'),
+        ], order='date desc, id desc', limit=20)
+        transcript = []
+        for message in reversed(messages):
+            content = html2plaintext(message.body or '').strip()
+            if content:
+                transcript.append({
+                    'role': 'assistant' if message.author_id.id == partner_chatgpt.id else 'user',
+                    'content': content,
+                })
+        transcript.append({
+            'role': 'user',
+            'content': 'Generate one follow-up message for the visitor now.',
+        })
+
+        try:
+            response = OpenAI(api_key=api_key, timeout=20.0).responses.create(
+                model=model,
+                instructions=f"{instructions}\n\n{inactivity_system_prompt}",
+                input=transcript,
+            )
+            if response.status == 'completed' and response.output_text:
+                return response.output_text.strip()
+        except Exception:
+            _logger.exception("Could not generate an inactivity follow-up for livechat channel %s", self.id)
+        return None
 
     def reset_chatgpt_conversation(self, session_key=None):
         """Reset the ChatGPT conversation(s) for this channel."""
