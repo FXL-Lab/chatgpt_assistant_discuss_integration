@@ -13,6 +13,7 @@
                     <group>
                         <field name="chatgpt_model"/>
                         <field name="chatgpt_instructions" widget="text" rows="16" class="chatgpt-instructions w-100"/>
+                        <field name="chatgpt_vector_store_id" placeholder="vs_..."/>
                     </group>
                     <group string="Inactivity Follow-up">
                         <field name="chatgpt_inactivity_timeout"/>
