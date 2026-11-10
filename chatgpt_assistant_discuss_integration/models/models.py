@@ -353,6 +353,12 @@ class Channel(models.Model):
             session_key = f"channel_{self.id}_user_{author_id}"
         return session_key
 
+    def _get_chatgpt_vector_store_id(self):
+        self.ensure_one()
+        if self.channel_type != 'livechat' or not self.livechat_channel_id:
+            return ''
+        return (self.livechat_channel_id.chatgpt_vector_store_id or '').strip()
+
     def _get_conversation_for_session(self, session_key, client):
         """Get or create an OpenAI conversation for a specific session."""
         try:
@@ -568,12 +574,19 @@ class Channel(models.Model):
             
             for retry in range(max_retries):
                 try:
-                    response = client.responses.create(
-                        model=model,
-                        instructions=instructions,
-                        input=[{'role': 'user', 'content': prompt}],
-                        conversation=conversation_id,
-                    )
+                    response_params = {
+                        'model': model,
+                        'instructions': instructions,
+                        'input': [{'role': 'user', 'content': prompt}],
+                        'conversation': conversation_id,
+                    }
+                    vector_store_id = self._get_chatgpt_vector_store_id()
+                    if vector_store_id:
+                        response_params['tools'] = [{
+                            'type': 'file_search',
+                            'vector_store_ids': [vector_store_id],
+                        }]
+                    response = client.responses.create(**response_params)
                     if response.status != 'completed' or not response.output_text:
                         _logger.error(f"Response status error for session {session_key}: {response.status}")
                         raise RuntimeError(response.error.message if response.error else f"Unexpected response status: {response.status}")
@@ -709,10 +722,19 @@ class Channel(models.Model):
         })
 
         try:
+            response_params = {
+                'model': model,
+                'instructions': f"{instructions}\n\n{inactivity_system_prompt}",
+                'input': transcript,
+            }
+            vector_store_id = self._get_chatgpt_vector_store_id()
+            if vector_store_id:
+                response_params['tools'] = [{
+                    'type': 'file_search',
+                    'vector_store_ids': [vector_store_id],
+                }]
             response = OpenAI(api_key=api_key, timeout=20.0).responses.create(
-                model=model,
-                instructions=f"{instructions}\n\n{inactivity_system_prompt}",
-                input=transcript,
+                **response_params
             )
             if response.status == 'completed' and response.output_text:
                 return response.output_text.strip()

@@ -28,6 +28,10 @@ class ImLivechatChannel(models.Model):
         string="ChatGPT Instructions",
         help="Instructions for ChatGPT in this channel. Uses the default instructions when empty.",
     )
+    chatgpt_vector_store_id = fields.Char(
+        string="OpenAI Vector Store ID",
+        help="Optional vector store for file search in this channel. Uses the default when empty.",
+    )
     chatgpt_inactivity_timeout = fields.Integer(
         string="Follow-up After (Minutes)",
         help="Send one follow-up after this many minutes without a new message. Set to 0 to disable.",
