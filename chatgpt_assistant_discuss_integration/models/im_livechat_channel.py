@@ -32,6 +32,16 @@ class ImLivechatChannel(models.Model):
         string="OpenAI Vector Store ID",
         help="Optional vector store for file search in this channel. Uses the default when empty.",
     )
+    chatgpt_crm_lead_name = fields.Char(
+        string="CRM Opportunity Name",
+        help="Base opportunity name for this channel. The livechat record ID is appended automatically.",
+    )
+    chatgpt_crm_lead_user_id = fields.Many2one(
+        'res.users',
+        string="CRM Opportunity Responsible",
+        domain=[('share', '=', False)],
+        help="Optional salesperson assigned to opportunities created from this channel.",
+    )
     chatgpt_inactivity_timeout = fields.Integer(
         string="Follow-up After (Minutes)",
         help="Send one follow-up after this many minutes without a new message. Set to 0 to disable.",

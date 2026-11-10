@@ -15,7 +15,7 @@
     'category': 'Website',
     'version': '0.6',
 
-    'depends': ['base', 'base_setup', 'mail', 'im_livechat', 'website_livechat'],
+    'depends': ['base', 'base_setup', 'mail', 'im_livechat', 'website_livechat', 'crm'],
     'external_dependencies': {'python': ['openai', 'markdown', 'phonenumbers']},
 
     'license': 'LGPL-3',
