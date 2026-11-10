@@ -19,6 +19,10 @@
                         <field name="chatgpt_inactivity_timeout"/>
                         <field name="chatgpt_inactivity_system_prompt" widget="text" rows="12" class="chatgpt-instructions w-100"/>
                     </group>
+                    <group string="CRM Opportunity">
+                        <field name="chatgpt_crm_lead_name" placeholder="Website chat"/>
+                        <field name="chatgpt_crm_lead_user_id" options="{'no_create': True}"/>
+                    </group>
                 </xpath>
             </field>
         </record>

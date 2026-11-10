@@ -12,7 +12,7 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools import email_normalize, html2plaintext
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
-from markupsafe import Markup
+from markupsafe import Markup, escape
 
 _logger = logging.getLogger(__name__)
 _EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
@@ -169,6 +169,22 @@ class Channel(models.Model):
         default=False,
         copy=False,
     )
+    chatgpt_crm_lead_id = fields.Many2one(
+        'crm.lead',
+        string="CRM Lead",
+        copy=False,
+        index=True,
+        readonly=True,
+        ondelete='set null',
+    )
+    chatgpt_crm_internal_note_id = fields.Many2one(
+        'mail.message',
+        string="CRM Chat Transcript Note",
+        copy=False,
+        index=True,
+        readonly=True,
+        ondelete='set null',
+    )
 
     def _message_post_after_hook(self, message, msg_vals):
         result = super(Channel, self)._message_post_after_hook(message, msg_vals=msg_vals)
@@ -176,6 +192,8 @@ class Channel(models.Model):
         self.chatgpt_message_text = None
         self.should_generate_chatgpt_response = False
         if self.env.context.get('chatgpt_inactivity_followup'):
+            if self.channel_type == 'livechat':
+                self._sync_chatgpt_crm_internal_note()
             return result
 
         if msg_vals.get('message_type') == 'comment':
@@ -185,6 +203,7 @@ class Channel(models.Model):
             })
             if self.channel_type == 'livechat':
                 self._capture_visitor_contact_details(message)
+                self._sync_chatgpt_crm_internal_note()
 
         config_parameter = self.env['ir.config_parameter'].sudo()
         enable_chatgpt_assistant_response = config_parameter.get_param(
@@ -320,23 +339,82 @@ class Channel(models.Model):
             partner = Partner.search([('email_normalized', '=', email)], limit=1)
         if not partner and phone:
             partner = Partner.search(['|', ('phone', '=', phone), ('mobile', '=', phone)], limit=1)
-        if not partner:
-            partner = Partner.create({
-                'name': visitor_partner.name if visitor_partner else visitor.display_name,
-                'email': email or False,
-                'mobile': phone or False,
-            })
-        else:
-            values = {}
-            if email and not partner.email:
-                values['email'] = email
-            if phone and not (partner.phone or partner.mobile):
-                values['mobile'] = phone
-            if values:
-                partner.write(values)
 
-        if visitor.chatgpt_contact_partner_id != partner:
-            visitor.write({'chatgpt_contact_partner_id': partner.id})
+        lead = self.chatgpt_crm_lead_id.sudo()
+        if lead:
+            values = {}
+            if lead.type == 'lead':
+                values['type'] = 'opportunity'
+            if partner and not lead.partner_id:
+                values['partner_id'] = partner.id
+            if email and not lead.email_from:
+                values['email_from'] = email
+            if phone:
+                if not lead.mobile:
+                    values['mobile'] = phone
+                if not lead.phone:
+                    values['phone'] = phone
+            if values:
+                lead.write(values)
+            return
+
+        livechat_settings = self.livechat_channel_id.sudo()
+        lead_name = livechat_settings.chatgpt_crm_lead_name or livechat_settings.name
+        lead = self.env['crm.lead'].sudo().create({
+            'name': f"{lead_name.strip()} #{self.id}",
+            'type': 'opportunity',
+            'contact_name': visitor_partner.name if visitor_partner else visitor.display_name,
+            'email_from': email or (partner.email if partner else False),
+            'phone': phone or (partner.phone or partner.mobile if partner else False),
+            'mobile': phone or (partner.mobile or partner.phone if partner else False),
+            'user_id': livechat_settings.chatgpt_crm_lead_user_id.id or False,
+        })
+        if partner:
+            lead.partner_id = partner.id
+        self.sudo().write({'chatgpt_crm_lead_id': lead.id})
+
+    def _sync_chatgpt_crm_internal_note(self):
+        self.ensure_one()
+        lead = self.chatgpt_crm_lead_id.sudo()
+        if not lead:
+            return
+
+        try:
+            messages = self.env['mail.message'].sudo().search([
+                ('model', '=', 'discuss.channel'),
+                ('res_id', '=', self.id),
+                ('message_type', '=', 'comment'),
+            ], order='date asc, id asc')
+            transcript = []
+            for chat_message in messages:
+                content = html2plaintext(chat_message.body or '').strip()
+                if not content:
+                    continue
+                author = chat_message.author_id.name if chat_message.author_id else _('Visitor')
+                safe_content = escape(content).replace('\n', Markup('<br/>'))
+                transcript.append(
+                    Markup('<p><strong>{}</strong>: {}</p>').format(escape(author), safe_content)
+                )
+            if not transcript:
+                return
+
+            note_body = Markup('<p><strong>{}</strong></p>{}').format(
+                escape(_('Livechat transcript')),
+                Markup('').join(transcript),
+            )
+            note = self.chatgpt_crm_internal_note_id.sudo()
+            if note and note.model == 'crm.lead' and note.res_id == lead.id:
+                note.write({'body': note_body})
+                return
+
+            note = lead.message_post(
+                body=note_body,
+                message_type='comment',
+                subtype_xmlid='mail.mt_note',
+            )
+            self.sudo().write({'chatgpt_crm_internal_note_id': note.id})
+        except Exception:
+            _logger.exception("Could not sync livechat transcript to CRM for channel %s", self.id)
 
     def _get_session_key(self, msg_vals):
         """Generate a unique session key for thread management"""
