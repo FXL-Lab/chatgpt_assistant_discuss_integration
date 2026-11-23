@@ -202,7 +202,26 @@ class Channel(models.Model):
                 'chatgpt_inactivity_followup_sent': False,
             })
             if self.channel_type == 'livechat':
-                self._capture_visitor_contact_details(message)
+                _logger.info(
+                    "CRM contact capture hook reached: channel_id=%s message_id=%s "
+                    "message_type=%s visitor_id=%s author_guest_id=%s author_partner_id=%s",
+                    self.id,
+                    message.id,
+                    message.message_type,
+                    self.livechat_visitor_id.id,
+                    message.author_guest_id.id,
+                    message.author_id.id,
+                )
+                try:
+                    self._capture_visitor_contact_details(message)
+                except Exception:
+                    _logger.exception(
+                        "CRM contact capture failed: channel_id=%s message_id=%s livechat_channel_id=%s",
+                        self.id,
+                        message.id,
+                        self.livechat_channel_id.id,
+                    )
+                    raise
                 self._sync_chatgpt_crm_internal_note()
 
         config_parameter = self.env['ir.config_parameter'].sudo()
@@ -304,21 +323,54 @@ class Channel(models.Model):
     def _capture_visitor_contact_details(self, message):
         self.ensure_one()
         visitor = self.livechat_visitor_id.sudo()
-        if not visitor or message.message_type != 'comment':
+        if message.message_type != 'comment':
+            _logger.info(
+                "CRM contact capture skipped: channel_id=%s message_id=%s reason=not_comment message_type=%s",
+                self.id,
+                message.id,
+                message.message_type,
+            )
             return
 
-        visitor_partner = visitor.partner_id.sudo()
-        is_visitor_message = bool(message.author_guest_id) or bool(
+        guest = message.author_guest_id.sudo()
+        if not visitor and not guest:
+            _logger.info(
+                "CRM contact capture skipped: channel_id=%s message_id=%s reason=no_visitor_or_guest",
+                self.id,
+                message.id,
+            )
+            return
+
+        visitor_partner = visitor.partner_id.sudo() if visitor else self.env['res.partner']
+        is_visitor_message = bool(guest) or bool(
             visitor_partner and message.author_id == visitor_partner
         )
+        _logger.info(
+            "CRM contact capture author check: channel_id=%s message_id=%s visitor_id=%s "
+            "visitor_partner_id=%s author_guest_id=%s author_partner_id=%s is_visitor_message=%s",
+            self.id,
+            message.id,
+            visitor.id or False,
+            visitor_partner.id,
+            guest.id,
+            message.author_id.id,
+            is_visitor_message,
+        )
         if not is_visitor_message:
+            _logger.info(
+                "CRM contact capture skipped: channel_id=%s message_id=%s reason=author_is_not_visitor",
+                self.id,
+                message.id,
+            )
             return
 
         message_text = html2plaintext(message.body or '')
         email_match = _EMAIL_PATTERN.search(message_text)
         email = email_normalize(email_match.group(0)) if email_match else False
 
-        country_code = visitor.country_id.code or (
+        country_code = (visitor.country_id.code if visitor else False) or (
+            guest.country_id.code if guest else False
+        ) or (
             visitor_partner.country_id.code if visitor_partner else None
         ) or self.env.company.country_id.code or 'HU'
         phone = False
@@ -330,11 +382,27 @@ class Channel(models.Model):
         except (phonenumbers.NumberParseException, ValueError):
             _logger.debug("Could not parse a phone number in livechat channel %s", self.id)
 
+        _logger.info(
+            "CRM contact extraction result: channel_id=%s message_id=%s email_found=%s "
+            "phone_found=%s phone_country=%s",
+            self.id,
+            message.id,
+            bool(email),
+            bool(phone),
+            country_code,
+        )
         if not email and not phone:
+            _logger.info(
+                "CRM contact capture skipped: channel_id=%s message_id=%s reason=no_contact_details_detected",
+                self.id,
+                message.id,
+            )
             return
 
         Partner = self.env['res.partner'].sudo()
-        partner = visitor.chatgpt_contact_partner_id.sudo() or visitor_partner
+        partner = (
+            visitor.chatgpt_contact_partner_id.sudo() if visitor else Partner
+        ) or visitor_partner
         if not partner and email:
             partner = Partner.search([('email_normalized', '=', email)], limit=1)
         if not partner and phone:
@@ -356,6 +424,22 @@ class Channel(models.Model):
                     values['phone'] = phone
             if values:
                 lead.write(values)
+                _logger.info(
+                    "CRM opportunity updated from livechat: channel_id=%s message_id=%s "
+                    "lead_id=%s updated_fields=%s",
+                    self.id,
+                    message.id,
+                    lead.id,
+                    ','.join(sorted(values)),
+                )
+            else:
+                _logger.info(
+                    "CRM opportunity already linked with no missing fields: channel_id=%s "
+                    "message_id=%s lead_id=%s",
+                    self.id,
+                    message.id,
+                    lead.id,
+                )
             return
 
         livechat_settings = self.livechat_channel_id.sudo()
@@ -363,7 +447,9 @@ class Channel(models.Model):
         lead = self.env['crm.lead'].sudo().create({
             'name': f"{lead_name.strip()} #{self.id}",
             'type': 'opportunity',
-            'contact_name': visitor_partner.name if visitor_partner else visitor.display_name,
+            'contact_name': visitor_partner.name if visitor_partner else (
+                visitor.display_name if visitor else guest.name
+            ),
             'email_from': email or (partner.email if partner else False),
             'phone': phone or (partner.phone or partner.mobile if partner else False),
             'mobile': phone or (partner.mobile or partner.phone if partner else False),
@@ -372,6 +458,17 @@ class Channel(models.Model):
         if partner:
             lead.partner_id = partner.id
         self.sudo().write({'chatgpt_crm_lead_id': lead.id})
+        _logger.info(
+            "CRM opportunity created from livechat: channel_id=%s message_id=%s "
+            "livechat_channel_id=%s lead_id=%s partner_id=%s email_found=%s phone_found=%s",
+            self.id,
+            message.id,
+            livechat_settings.id,
+            lead.id,
+            partner.id,
+            bool(email),
+            bool(phone),
+        )
 
     def _sync_chatgpt_crm_internal_note(self):
         self.ensure_one()
