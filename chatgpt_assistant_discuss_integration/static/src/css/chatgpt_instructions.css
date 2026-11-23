@@ -4,8 +4,38 @@
 }
 
 .chatgpt-instructions textarea {
-    min-height: 22rem;
-    max-height: 65vh;
-    overflow-y: auto;
+    min-height: 22rem !important;
+    height: 60vh !important;
+    max-height: 65vh !important;
+    overflow-y: scroll !important;
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    resize: vertical;
+}
+
+.chatgpt-instructions textarea::-webkit-scrollbar,
+textarea.chatgpt-instructions::-webkit-scrollbar {
+    width: 14px;
+}
+
+.chatgpt-instructions textarea::-webkit-scrollbar-track,
+textarea.chatgpt-instructions::-webkit-scrollbar-track {
+    background: #e9ecef;
+}
+
+.chatgpt-instructions textarea::-webkit-scrollbar-thumb,
+textarea.chatgpt-instructions::-webkit-scrollbar-thumb {
+    background: #7b8490;
+    border: 3px solid #e9ecef;
+    border-radius: 7px;
+}
+
+textarea.chatgpt-instructions {
+    min-height: 22rem !important;
+    height: 60vh !important;
+    max-height: 65vh !important;
+    overflow-y: scroll !important;
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
     resize: vertical;
 }
