@@ -13,7 +13,7 @@
     'author': "FXL Technologies",
     'website': "https://fxltech.com",
     'category': 'Website',
-    'version': '0.6',
+    'version': '0.7',
 
     'depends': ['base', 'base_setup', 'mail', 'im_livechat', 'website_livechat', 'crm'],
     'external_dependencies': {'python': ['openai', 'markdown', 'phonenumbers']},
