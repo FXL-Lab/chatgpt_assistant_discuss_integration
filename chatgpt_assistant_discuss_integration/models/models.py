@@ -777,7 +777,7 @@ class Channel(models.Model):
                         raise RuntimeError(response.error.message if response.error else f"Unexpected response status: {response.status}")
 
                     message_text = response.output_text
-                    _logger.info(f"ChatGPT response for session {session_key}: {message_text}")
+                    _logger.info("ChatGPT response generated for session %s", session_key)
                     self._mark_chatgpt_conversation_active(session_key)
                     return message_text
                             
