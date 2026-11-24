@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import base64
 import json
 import logging
 import re
@@ -13,6 +14,7 @@ from odoo.exceptions import UserError, ValidationError
 from odoo.tools import email_normalize, html2plaintext
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 from markupsafe import Markup, escape
+from ..file_support import CHAT_ATTACHMENT_MIME_TYPES, MAX_CHAT_ATTACHMENT_BYTES, MAX_CHAT_ATTACHMENTS_TOTAL_BYTES
 
 _logger = logging.getLogger(__name__)
 _EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
@@ -231,8 +233,9 @@ class Channel(models.Model):
         if not enable_chatgpt_assistant_response or not self.enable_chatgpt_assistant_response:
             self.should_generate_chatgpt_response = False
             return result
-        prompt = msg_vals.get('body')
-        if not prompt:
+        prompt = msg_vals.get('body') or ''
+        attachments = message.sudo().attachment_ids
+        if not prompt and not attachments:
             self.should_generate_chatgpt_response = False
             return result
 
@@ -312,6 +315,7 @@ class Channel(models.Model):
                     model=model,
                     instructions=instructions,
                     msg_vals=msg_vals,
+                    attachments=attachments,
                 )
             except Exception as e:
                 _logger.error(f"message_post_after_hook error: {e}")
@@ -723,7 +727,7 @@ class Channel(models.Model):
         
         return processed_text
 
-    def _get_chatgpt_response(self, prompt, model=None, instructions=None, msg_vals=None):
+    def _get_chatgpt_response(self, prompt, model=None, instructions=None, msg_vals=None, attachments=None):
         config_parameter = self.env['ir.config_parameter'].sudo()
         chatgpt_api_key = config_parameter.get_param('chatgpt_assistant_discuss_integration.chatgpt_api_key')
         model = model or config_parameter.get_param('chatgpt_assistant_discuss_integration.default_model')
@@ -739,6 +743,12 @@ class Channel(models.Model):
             _logger.error("OpenAI request skipped: model or instructions are not configured for channel %s", self.id)
             return "The chat assistant is not configured. Please contact an administrator."
 
+        try:
+            input_content = self._prepare_chatgpt_input(prompt, attachments)
+        except ValueError as error:
+            _logger.warning("OpenAI attachment input rejected for channel %s: %s", self.id, error)
+            return str(error)
+
         session_key = self._get_session_key(msg_vals or {})
 
         try:
@@ -752,7 +762,7 @@ class Channel(models.Model):
                     response_params = {
                         'model': model,
                         'instructions': instructions,
-                        'input': [{'role': 'user', 'content': prompt}],
+                        'input': [{'role': 'user', 'content': input_content}],
                         'conversation': conversation_id,
                     }
                     vector_store_id = self._get_chatgpt_vector_store_id()
@@ -809,6 +819,50 @@ class Channel(models.Model):
                 self.id, session_key, type(error).__name__,
             )
             return "Sorry, I'm having trouble responding right now. Please try again in a moment."
+
+    def _prepare_chatgpt_input(self, prompt, attachments=None):
+        self.ensure_one()
+        attachments = attachments.sudo().exists() if attachments else self.env['ir.attachment']
+        if not attachments:
+            return prompt
+
+        total_size = sum(attachments.mapped('file_size'))
+        if total_size > MAX_CHAT_ATTACHMENTS_TOTAL_BYTES:
+            raise ValueError(_("The combined size of attachments must not exceed 50 MB."))
+
+        content = [{
+            'type': 'input_text',
+            'text': prompt or _('Please review the attached file(s).'),
+        }]
+        for attachment in attachments:
+            extension = '.' + attachment.name.rsplit('.', 1)[-1].lower() if '.' in attachment.name else ''
+            mime_type = CHAT_ATTACHMENT_MIME_TYPES.get(extension)
+            if not mime_type:
+                raise ValueError(_("Only PDF, JPEG, PNG, and WebP files are supported in livechat."))
+            if attachment.file_size > MAX_CHAT_ATTACHMENT_BYTES:
+                raise ValueError(_("Livechat files must be 10 MB or smaller."))
+
+            encoded_file = base64.b64encode(attachment.raw).decode('ascii')
+            data_url = f"data:{mime_type};base64,{encoded_file}"
+            if extension == '.pdf':
+                content.append({
+                    'type': 'input_file',
+                    'filename': attachment.name,
+                    'file_data': data_url,
+                })
+            else:
+                content.append({
+                    'type': 'input_image',
+                    'image_url': data_url,
+                    'detail': 'auto',
+                })
+        _logger.info(
+            "Preparing OpenAI livechat request with attachments: channel_id=%s count=%s total_bytes=%s",
+            self.id,
+            len(attachments),
+            total_size,
+        )
+        return content
 
     @api.model
     def _cron_send_inactivity_followups(self, limit=100):
