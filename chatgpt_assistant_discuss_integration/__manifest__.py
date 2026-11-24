@@ -34,6 +34,9 @@
         'web.assets_backend': [
             'chatgpt_assistant_discuss_integration/static/src/css/chatgpt_instructions.css',
         ],
+        'im_livechat.assets_embed_core': [
+            'chatgpt_assistant_discuss_integration/static/src/xml/livechat_composer.xml',
+        ],
     },
     # 'assets': {
     #     'web.assets_backend': [

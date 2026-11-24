@@ -10,6 +10,9 @@
                         <field name="enable_chatgpt_assistant_response_channel"/>
                         <span>Enable ChatGPT Assistant</span>
                     </div>
+                    <group string="Visitor File Uploads">
+                        <field name="chatgpt_allow_public_upload"/>
+                    </group>
                     <group>
                         <field name="chatgpt_model"/>
                         <field name="chatgpt_instructions" widget="text" rows="16" class="chatgpt-instructions w-100"/>

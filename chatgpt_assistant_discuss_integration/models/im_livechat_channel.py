@@ -12,6 +12,11 @@ class ImLivechatChannel(models.Model):
         string="Enable ChatGPT Assistant in this channel",
         default=False,
     )
+    chatgpt_allow_public_upload = fields.Boolean(
+        string="Allow Visitor File Uploads",
+        default=True,
+        help="Allow visitors to attach PDF and image files in this livechat.",
+    )
     prompt_id = fields.Char(
         string="Prompt ID",
         help="ID of the OpenAI dashboard prompt to use in this channel.",
@@ -52,6 +57,21 @@ class ImLivechatChannel(models.Model):
         default=DEFAULT_CHATGPT_INACTIVITY_SYSTEM_PROMPT,
         help="System instructions used to generate this channel's inactivity follow-up message.",
     )
+
+    def _get_livechat_discuss_channel_vals(
+        self, anonymous_name, previous_operator_id=None, chatbot_script=None, user_id=None, country_id=None, lang=None
+    ):
+        values = super()._get_livechat_discuss_channel_vals(
+            anonymous_name,
+            previous_operator_id=previous_operator_id,
+            chatbot_script=chatbot_script,
+            user_id=user_id,
+            country_id=country_id,
+            lang=lang,
+        )
+        if values:
+            values['allow_public_upload'] = self.chatgpt_allow_public_upload
+        return values
 
     @api.depends('user_ids.im_status')
     def _compute_available_operator_ids(self):
